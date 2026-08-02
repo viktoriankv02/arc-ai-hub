@@ -7,8 +7,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import "../interfaces/ITreasury.sol";
+import "../interfaces/INFTBoostManager.sol";
 import "../errors/StakingErrors.sol";
-import "./StakingTypes.sol";
 
 contract AAIHStakingV3 is
     Ownable2Step,
@@ -18,141 +18,289 @@ contract AAIHStakingV3 is
     IERC20 public immutable token;
     ITreasury public immutable treasury;
 
+    INFTBoostManager public nftBoost;
+
     uint16 public constant PENALTY_PERCENT = 10;
+
     uint256 public totalStaked;
 
+    bool public daoEnabled;
+
     struct Pool {
+
         uint32 lockDays;
+
         uint16 apy;
+
         bool active;
+
         bool flexible;
+
     }
 
     struct Position {
+
         uint256 amount;
+
         uint64 startTime;
+
         uint64 unlockTime;
+
         uint16 poolId;
+
         bool withdrawn;
+
     }
 
-    mapping(uint16 => Pool) public pools;
-    mapping(address => Position[]) internal positions;
+    mapping(uint16 => Pool)
+        public pools;
+
+    mapping(address => Position[])
+        internal positions;
+
+    mapping(address => address)
+        public referrer;
 
     event PoolCreated(
+
         uint16 indexed id,
+
         uint32 lockDays,
+
         uint16 apy,
+
         bool flexible
+
     );
 
     event PoolUpdated(
+
         uint16 indexed id
+
     );
 
     event Staked(
+
         address indexed user,
+
         uint16 indexed pool,
+
         uint256 amount
+
     );
 
     event Withdrawn(
-        address indexed user,
-        uint256 amount,
-        uint256 reward
-    );
 
-    event EmergencyWithdraw(
         address indexed user,
-        uint256 amount
+
+        uint256 amount,
+
+        uint256 reward
+
     );
 
     event EarlyWithdraw(
+
         address indexed user,
+
         uint256 returnedAmount,
+
         uint256 penalty
+
+    );
+
+    event EmergencyWithdraw(
+
+        address indexed user,
+
+        uint256 amount
+
+    );
+
+    event ReferrerRegistered(
+
+        address indexed user,
+
+        address indexed referrer
+
     );
 
     constructor(
+
         address tokenAddress,
+
         address treasuryAddress,
+
         address owner
+
     )
         Ownable(owner)
     {
-        token = IERC20(tokenAddress);
-        treasury = ITreasury(treasuryAddress);
 
-        pools[1]=Pool(30,8,true,false);
-        pools[2]=Pool(90,12,true,false);
-        pools[3]=Pool(180,18,true,false);
-        pools[4]=Pool(365,25,true,false);
+        token =
+            IERC20(
+                tokenAddress
+            );
 
-        // Flexible Pool
+        treasury =
+            ITreasury(
+                treasuryAddress
+            );
 
-        pools[5]=Pool(0,5,true,true);
+        nftBoost =
+            INFTBoostManager(
+                address(0)
+            );
+
+        pools[1] =
+            Pool(
+                30,
+                8,
+                true,
+                false
+            );
+
+        pools[2] =
+            Pool(
+                90,
+                12,
+                true,
+                false
+            );
+
+        pools[3] =
+            Pool(
+                180,
+                18,
+                true,
+                false
+            );
+
+        pools[4] =
+            Pool(
+                365,
+                25,
+                true,
+                false
+            );
+
+        pools[5] =
+            Pool(
+                0,
+                5,
+                true,
+                true
+            );
     }
-        // =====================================================
-    //                     STAKING
+
+    function setNFTBoostManager(
+
+        address manager
+
+    )
+        external
+        onlyOwner
+    {
+
+        nftBoost =
+            INFTBoostManager(
+                manager
+            );
+
+    }
+
+    // =====================================================
+    //                     STAKE
     // =====================================================
 
     function stake(
+
         uint16 poolId,
+
         uint256 amount
+
     )
         external
         whenNotPaused
         nonReentrant
     {
-        if (amount == 0)
+
+        if(amount == 0)
             revert AmountZero();
 
-        Pool memory pool = pools[poolId];
+        Pool memory pool =
+            pools[poolId];
 
-        if (!pool.active)
+        if(!pool.active)
             revert PoolInactive();
 
-        bool ok = token.transferFrom(
-            msg.sender,
-            address(this),
-            amount
-        );
+        bool ok =
+            token.transferFrom(
+                msg.sender,
+                address(this),
+                amount
+            );
 
-        if (!ok)
+        if(!ok)
             revert TransferFailed();
 
         uint64 unlockTime;
 
-        if (pool.flexible) {
-            unlockTime = uint64(block.timestamp);
+        if(pool.flexible){
+
+            unlockTime =
+                uint64(
+                    block.timestamp
+                );
+
         } else {
-            unlockTime = uint64(
-                block.timestamp +
-                uint64(pool.lockDays) *
-                1 days
-            );
+
+            unlockTime =
+                uint64(
+                    block.timestamp +
+                    uint64(pool.lockDays) *
+                    1 days
+                );
+
         }
 
         positions[msg.sender].push(
+
             Position({
+
                 amount: amount,
-                startTime: uint64(block.timestamp),
-                unlockTime: unlockTime,
-                poolId: poolId,
-                withdrawn: false
+
+                startTime:
+                    uint64(
+                        block.timestamp
+                    ),
+
+                unlockTime:
+                    unlockTime,
+
+                poolId:
+                    poolId,
+
+                withdrawn:
+                    false
+
             })
+
         );
 
         totalStaked += amount;
 
         emit Staked(
+
             msg.sender,
+
             poolId,
+
             amount
+
         );
     }
-
-    // =====================================================
+        // =====================================================
     //                  REWARD
     // =====================================================
 
@@ -162,7 +310,7 @@ contract AAIHStakingV3 is
     )
         public
         view
-        returns(uint256)
+        returns (uint256)
     {
         Position memory p =
             positions[user][index];
@@ -170,7 +318,7 @@ contract AAIHStakingV3 is
         Pool memory pool =
             pools[p.poolId];
 
-        if(pool.flexible){
+        if (pool.flexible) {
 
             uint256 stakingDays =
                 (block.timestamp -
@@ -189,6 +337,38 @@ contract AAIHStakingV3 is
             pool.apy *
             pool.lockDays /
             36500;
+    }
+
+    function calculateRewardWithBoost(
+        address user,
+        uint256 index
+    )
+        public
+        view
+        returns (uint256)
+    {
+        uint256 reward =
+            calculateReward(
+                user,
+                index
+            );
+
+        if (
+            address(nftBoost) ==
+            address(0)
+        ) {
+            return reward;
+        }
+
+        uint16 boost =
+            nftBoost.userBoost(
+                user
+            );
+
+        return
+            reward *
+            boost /
+            100;
     }
 
     // =====================================================
@@ -210,22 +390,24 @@ contract AAIHStakingV3 is
         Pool memory pool =
             pools[p.poolId];
 
-        if(
+        if (
             !pool.flexible &&
-            block.timestamp < p.unlockTime
-        ){
+            block.timestamp <
+            p.unlockTime
+        ) {
             revert StakeLocked();
         }
 
         uint256 reward =
-            calculateReward(
+            calculateRewardWithBoost(
                 msg.sender,
                 index
             );
 
         p.withdrawn = true;
 
-        totalStaked -= p.amount;
+        totalStaked -=
+            p.amount;
 
         bool ok =
             token.transfer(
@@ -233,7 +415,7 @@ contract AAIHStakingV3 is
                 p.amount
             );
 
-        if(!ok)
+        if (!ok)
             revert TransferFailed();
 
         treasury.withdrawToken(
@@ -262,21 +444,25 @@ contract AAIHStakingV3 is
         Position storage p =
             positions[msg.sender][index];
 
-        if(p.withdrawn)
+        if (p.withdrawn)
             revert AlreadyWithdrawn();
 
         Pool memory pool =
             pools[p.poolId];
 
-        if(pool.flexible)
-            revert();
+        if (pool.flexible)
+            revert PoolInactive();
 
-        if(block.timestamp >= p.unlockTime)
-            revert();
+        if (
+            block.timestamp >=
+            p.unlockTime
+        )
+            revert StakeLocked();
 
         p.withdrawn = true;
 
-        totalStaked -= p.amount;
+        totalStaked -=
+            p.amount;
 
         uint256 penalty =
             p.amount *
@@ -293,7 +479,7 @@ contract AAIHStakingV3 is
                 returned
             );
 
-        if(!ok)
+        if (!ok)
             revert TransferFailed();
 
         ok =
@@ -302,7 +488,7 @@ contract AAIHStakingV3 is
                 penalty
             );
 
-        if(!ok)
+        if (!ok)
             revert TransferFailed();
 
         emit EarlyWithdraw(
@@ -325,12 +511,13 @@ contract AAIHStakingV3 is
         Position storage p =
             positions[msg.sender][index];
 
-        if(p.withdrawn)
+        if (p.withdrawn)
             revert AlreadyWithdrawn();
 
         p.withdrawn = true;
 
-        totalStaked -= p.amount;
+        totalStaked -=
+            p.amount;
 
         bool ok =
             token.transfer(
@@ -338,7 +525,7 @@ contract AAIHStakingV3 is
                 p.amount
             );
 
-        if(!ok)
+        if (!ok)
             revert TransferFailed();
 
         emit EmergencyWithdraw(
@@ -359,10 +546,8 @@ contract AAIHStakingV3 is
         external
         onlyOwner
     {
-        require(
-            pools[id].apy == 0,
-            "Pool exists"
-        );
+        if (pools[id].apy != 0)
+            revert();
 
         pools[id] = Pool({
             lockDays: lockDays,
@@ -389,12 +574,11 @@ contract AAIHStakingV3 is
         external
         onlyOwner
     {
-        Pool storage pool = pools[id];
+        Pool storage pool =
+            pools[id];
 
-        require(
-            pool.apy != 0,
-            "Pool not found"
-        );
+        if (pool.apy == 0)
+            revert();
 
         pool.lockDays = lockDays;
         pool.apy = apy;
@@ -450,24 +634,28 @@ contract AAIHStakingV3 is
         view
         returns(uint256 total)
     {
-        uint256 len = positions[user].length;
+        uint256 len =
+            positions[user].length;
 
-        for(uint256 i; i < len; i++){
-
-            if(!positions[user][i].withdrawn){
-
-                total += positions[user][i].amount;
-
+        for(
+            uint256 i;
+            i < len;
+            i++
+        ){
+            if(
+                !positions[user][i]
+                    .withdrawn
+            ){
+                total +=
+                    positions[user][i]
+                        .amount;
             }
-
         }
     }
 
     // =====================================================
-    //                  DAO READY
+    //                    DAO
     // =====================================================
-
-    bool public daoEnabled;
 
     function enableDAO()
         external
@@ -477,7 +665,7 @@ contract AAIHStakingV3 is
     }
 
     // =====================================================
-    //             AUTO COMPOUND (V4)
+    //              AUTO COMPOUND
     // =====================================================
 
     function canCompound(
@@ -498,46 +686,49 @@ contract AAIHStakingV3 is
     }
 
     // =====================================================
-    //                 NFT BOOST (V4)
+    //                 NFT BOOST
     // =====================================================
 
     function rewardMultiplier(
-        address
+        address user
     )
         public
-        pure
+        view
         returns(uint256)
     {
-        return 100;
+        if(
+            address(nftBoost) ==
+            address(0)
+        ){
+            return 100;
+        }
+
+        return
+            nftBoost.userBoost(
+                user
+            );
     }
 
     // =====================================================
-    //               REFERRAL SYSTEM
+    //                 REFERRALS
     // =====================================================
-
-    mapping(address => address)
-        public referrer;
-
-    event ReferrerRegistered(
-        address indexed user,
-        address indexed ref
-    );
 
     function registerReferrer(
         address ref
     )
         external
     {
-        require(
-            ref != msg.sender,
-            "Self referral"
-        );
+        if(
+            ref ==
+            msg.sender
+        )
+            revert();
 
-        require(
-            referrer[msg.sender] ==
-            address(0),
-            "Already registered"
-        );
+        if(
+            referrer[msg.sender] !=
+            address(0)
+        )
+            revert();
 
         referrer[msg.sender] = ref;
 
@@ -548,7 +739,7 @@ contract AAIHStakingV3 is
     }
 
     // =====================================================
-    //                 INFORMATION
+    //                 VERSION
     // =====================================================
 
     function version()
@@ -556,6 +747,7 @@ contract AAIHStakingV3 is
         pure
         returns(string memory)
     {
-        return "AAIH Staking V3";
+        return
+            "AAIH Staking V3";
     }
 }
