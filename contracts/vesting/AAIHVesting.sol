@@ -164,3 +164,144 @@ function releasableAmount(
         vestedAmount(id) -
         v.released;
 }
+// ======================================================
+//                 RELEASE TOKENS
+// ======================================================
+
+function release(
+    uint256 id
+)
+    external
+    nonReentrant
+{
+    VestingSchedule storage v =
+        vestings[id];
+
+    require(
+        !v.revoked,
+        "Revoked"
+    );
+
+    require(
+        msg.sender ==
+        v.beneficiary,
+        "Not beneficiary"
+    );
+
+    uint256 amount =
+        releasableAmount(id);
+
+    require(
+        amount > 0,
+        "Nothing to release"
+    );
+
+    v.released += amount;
+
+    bool ok =
+        token.transfer(
+            v.beneficiary,
+            amount
+        );
+
+    require(
+        ok,
+        "Transfer failed"
+    );
+
+    emit TokensReleased(
+        id,
+        amount
+    );
+}
+
+// ======================================================
+//                 REVOKE VESTING
+// ======================================================
+
+function revoke(
+    uint256 id
+)
+    external
+    onlyOwner
+{
+    VestingSchedule storage v =
+        vestings[id];
+
+    require(
+        v.revocable,
+        "Not revocable"
+    );
+
+    require(
+        !v.revoked,
+        "Already revoked"
+    );
+
+    v.revoked = true;
+
+    emit VestingRevoked(id);
+}
+
+// ======================================================
+//                  VIEW HELPERS
+// ======================================================
+
+function getVesting(
+    uint256 id
+)
+    external
+    view
+    returns(VestingSchedule memory)
+{
+    return vestings[id];
+}
+
+function beneficiaryVestings(
+    address beneficiary
+)
+    external
+    view
+    returns(uint256[] memory ids)
+{
+    uint256 count;
+
+    for(uint256 i = 1; i <= vestingCount; i++){
+
+        if(
+            vestings[i].beneficiary ==
+            beneficiary
+        ){
+            count++;
+        }
+    }
+
+    ids = new uint256[](count);
+
+    uint256 index;
+
+    for(uint256 i = 1; i <= vestingCount; i++){
+
+        if(
+            vestings[i].beneficiary ==
+            beneficiary
+        ){
+            ids[index] = i;
+            index++;
+        }
+    }
+}
+
+// ======================================================
+//                    CONTRACT INFO
+// ======================================================
+
+function version()
+    external
+    pure
+    returns(string memory)
+{
+    return "AAIH Vesting V1";
+}
+// End of contract
+}
