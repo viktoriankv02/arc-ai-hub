@@ -1,12 +1,13 @@
-import { ethers } from "hardhat";
+import { network } from "hardhat";
+
+const { ethers } = await network.create();
 
 export async function deployAAIHToken() {
     const [owner, user1, user2] = await ethers.getSigners();
 
-    const Token = await ethers.getContractFactory("AAIHToken");
-
-    const token = await Token.deploy(
-        owner.address
+    const token = await ethers.deployContract(
+        "AAIHToken",
+        [owner.address]
     );
 
     await token.waitForDeployment();

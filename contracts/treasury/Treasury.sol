@@ -22,16 +22,18 @@ contract Treasury is Ownable2Step, ReentrancyGuard {
         uint256 amount
     );
 
+    address public stakingContract;
+
     constructor(address initialOwner)
         Ownable(initialOwner)
-        address public stakingContract;
-        function setStakingContract(address _staking)
-    external
-    onlyOwner
-{
-    stakingContract = _staking;
-}
     {}
+
+    function setStakingContract(address _staking)
+        external
+        onlyOwner
+    {
+        stakingContract = _staking;
+    }
 
     receive() external payable {
         emit ETHDeposited(msg.sender, msg.value);
