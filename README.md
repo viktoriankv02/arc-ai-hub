@@ -1,57 +1,91 @@
-# Sample Hardhat 3 Project (`mocha` and `ethers`)
+# ARC AI Hub
 
-This project showcases a Hardhat 3 project using `mocha` for tests and the `ethers` library for Ethereum interactions.
+ARC AI Hub is an on-chain coordination and reward layer for AI agents, jobs, verified activity, reputation and incentives.
 
-To learn more about Hardhat 3, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3](https://hardhat.org/hardhat3-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+## Core architecture
 
-## Project Overview
+```text
+AI Agent Runtime
+      |
+   AI Jobs
+      |
+AIJobActivityAdapter
+      |
+ActivityRegistry
+      |
+RewardPolicyEngine
+      |
+EligibilityEngine
+      |
+PointsLedger
+      |
+RewardEngine
+      |
+Native reward / future ERC20 rewards
+```
 
-This example project includes:
+The important design rule is that **AI jobs are one source of verified activity, not a separate reward system**. The same reward pipeline can later accept Base, Arc, Sui, quests, staking and other adapters.
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using `mocha` and ethers.js
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+## Core contracts
 
-## Usage
+- `contracts/ai/AIAgentRuntime.sol` — agent registration, lifecycle and heartbeat.
+- `contracts/ai/AIAgentEngine.sol` — AI job creation, assignment and completion.
+- `contracts/ai/AIJobActivityAdapter.sol` — converts completed AI jobs into canonical verified activities.
+- `contracts/core/ActivityRegistry.sol` — canonical activity ledger and reporter authorization.
+- `contracts/core/RewardPolicyEngine.sol` — maps activity types/chains to points and reward amounts.
+- `contracts/core/EligibilityEngine.sol` — claim limits, cooldowns, minimum points and verification requirements.
+- `contracts/core/PointsLedger.sol` — non-transferable points ledger.
+- `contracts/core/RewardEngine.sol` — atomic orchestration of policy, eligibility, points and native payout.
 
-### Running Tests
+## Reward flow
 
-To run all the tests in the project, execute the following command:
+1. A trusted adapter records an activity in `ActivityRegistry`.
+2. `RewardPolicyEngine` verifies that the activity matches an active policy.
+3. `EligibilityEngine` enforces the user's claim rules.
+4. `PointsLedger` credits the activity once.
+5. `RewardEngine` pays the configured native reward.
+6. The same activity cannot be replayed for the same policy.
+
+## AI job flow
+
+1. A user creates an AI job and funds it.
+2. An agent is assigned and the job is completed.
+3. `AIJobActivityAdapter` resolves the agent owner from `AIAgentRuntime`.
+4. The completed job becomes a verified `AI_JOB_COMPLETED` activity.
+5. The normal reward pipeline handles points and incentives.
+
+## Development
+
+Install dependencies:
+
+```shell
+npm install
+```
+
+Compile:
+
+```shell
+npx hardhat compile
+```
+
+Run the complete test suite:
 
 ```shell
 npx hardhat test
 ```
 
-You can also selectively run the Solidity or `mocha` tests:
+Run the reward flow tests only:
 
 ```shell
-npx hardhat test solidity
-npx hardhat test mocha
+npx hardhat test --grep "AI Hub reward flow"
 ```
 
-### Make a deployment to Sepolia
-
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
+Run the AI job adapter tests only:
 
 ```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
+npx hardhat test --grep "AI job -> activity adapter"
 ```
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+## Next architecture step
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
-
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
-
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
-```
-
-After setting the variable, you can run the deployment with the Sepolia network:
-
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
+The next step is to replace the temporary owner-triggered job completion bridge with authorized reporters/adapters and then add ERC20 reward support, cross-chain verification adapters, staking/reputation and production deployment modules.
