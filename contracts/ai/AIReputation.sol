@@ -19,6 +19,13 @@ contract AIReputation is Ownable {
 
         bool verified;
 
+        uint256 totalEarned;
+
+        uint256 lastJobTimestamp;
+
+        uint256 uptimeScore;
+
+        uint256 inferenceCount;
     }
 
     mapping(uint256 => Reputation) public agents;
@@ -125,6 +132,62 @@ contract AIReputation is Ownable {
 
     }
 
+    function addEarnings(
+
+        uint256 agentId,
+
+        uint256 amount
+
+    )
+
+        external
+
+        onlyOwner
+
+    {
+
+        Reputation storage r = agents[agentId];
+
+        r.totalEarned += amount;
+
+        r.lastJobTimestamp = block.timestamp;
+
+    }
+
+    function increaseInference(
+
+        uint256 agentId
+
+    )
+
+        external
+
+        onlyOwner
+
+    {
+
+        agents[agentId].inferenceCount++;
+
+    }
+
+    function increaseUptime(
+
+        uint256 agentId,
+
+        uint256 points
+
+    )
+
+        external
+
+        onlyOwner
+
+    {
+
+        agents[agentId].uptimeScore += points;
+
+    }
+
     function averageRating(
         uint256 agentId
     )
@@ -142,6 +205,28 @@ contract AIReputation is Ownable {
         return
             r.totalRating*100/
             r.ratingCount;
+
+    }
+
+    function reputationDetails(
+
+        uint256 agentId
+
+    )
+
+        external
+
+        view
+
+        returns(
+
+            Reputation memory
+
+        )
+
+    {
+
+        return agents[agentId];
 
     }
 
