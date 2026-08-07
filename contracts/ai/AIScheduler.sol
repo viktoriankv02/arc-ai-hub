@@ -55,6 +55,38 @@ contract AIScheduler is Ownable {
 
     {
 
+        _schedule(jobId, agentId);
+
+    }
+
+    function scheduleJob(
+
+        uint256 jobId,
+
+        uint256 agentId
+
+    )
+
+        external
+
+    {
+
+        _schedule(jobId, agentId);
+
+    }
+
+    function _schedule(
+
+        uint256 jobId,
+
+        uint256 agentId
+
+    )
+
+        internal
+
+    {
+
         assignments[nextAssignmentId] = Assignment({
 
             jobId: jobId,
