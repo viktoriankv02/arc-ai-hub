@@ -8,8 +8,17 @@ const jobManagerAbi = [
   "function jobs(uint256) view returns (uint256 id,address user,uint256 agentId,uint256 computeNodeId,uint256 requestId,uint256 reward,uint256 createdAt,uint256 startedAt,uint256 finishedAt,uint8 status)",
 ];
 
+const gatewayAbi = [
+  "function nextRequestId() view returns (uint256)",
+  "function requests(uint256) view returns (uint256 id,address user,uint256 serviceId,string payloadHash,uint256 timestamp,bool processed)",
+];
+
 export const jobManager = config.jobManager
   ? new ethers.Contract(config.jobManager, jobManagerAbi, provider)
+  : null;
+
+export const gateway = config.gateway
+  ? new ethers.Contract(config.gateway, gatewayAbi, provider)
   : null;
 
 export async function getChainStatus() {
@@ -25,7 +34,21 @@ export async function getChainStatus() {
   };
 }
 
-export async function getJob(jobId: bigint | number) {
+export async function getJobs(limit = 20) {
+  if (!jobManager) throw new Error("AI_JOB_MANAGER_ADDRESS is not configured");
+
+  const next = Number(await jobManager.nextJobId());
+  const start = Math.max(0, next - Math.min(limit, 50));
+  const jobs = [];
+
+  for (let id = next - 1; id >= start; id--) {
+    jobs.push(await getJob(id));
+  }
+
+  return jobs;
+}
+
+export async function getJob(jobId: bigint | number | string) {
   if (!jobManager) throw new Error("AI_JOB_MANAGER_ADDRESS is not configured");
 
   const job = await jobManager.jobs(jobId);
@@ -40,5 +63,19 @@ export async function getJob(jobId: bigint | number) {
     startedAt: job.startedAt.toString(),
     finishedAt: job.finishedAt.toString(),
     status: Number(job.status),
+  };
+}
+
+export async function getRequest(requestId: bigint | number | string) {
+  if (!gateway) throw new Error("AI_API_GATEWAY_ADDRESS is not configured");
+
+  const request = await gateway.requests(requestId);
+  return {
+    id: request.id.toString(),
+    user: request.user,
+    serviceId: request.serviceId.toString(),
+    payloadHash: request.payloadHash,
+    timestamp: request.timestamp.toString(),
+    processed: request.processed,
   };
 }
