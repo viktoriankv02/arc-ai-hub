@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { config } from "./config.js";
-import { getChainStatus, getJob } from "./chain.js";
+import { getChainStatus, getJob, getJobs, getRequest } from "./chain.js";
 
 const app = express();
 app.use(cors());
@@ -16,10 +16,26 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
+app.get("/api/jobs", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 20);
+    res.json(await getJobs(Number.isFinite(limit) ? limit : 20));
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 app.get("/api/jobs/:id", async (req, res) => {
   try {
-    const job = await getJob(req.params.id);
-    res.json(job);
+    res.json(await getJob(req.params.id));
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get("/api/requests/:id", async (req, res) => {
+  try {
+    res.json(await getRequest(req.params.id));
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
