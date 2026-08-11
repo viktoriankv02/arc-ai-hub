@@ -34,11 +34,26 @@ export async function getChainStatus() {
   };
 }
 
+export async function getPlatformStats() {
+  const [nextJobId, nextRequestId] = await Promise.all([
+    jobManager ? jobManager.nextJobId() : 0n,
+    gateway ? gateway.nextRequestId() : 0n,
+  ]);
+
+  return {
+    totalJobs: nextJobId.toString(),
+    totalRequests: nextRequestId.toString(),
+    jobManagerConfigured: Boolean(jobManager),
+    gatewayConfigured: Boolean(gateway),
+  };
+}
+
 export async function getJobs(limit = 20) {
   if (!jobManager) throw new Error("AI_JOB_MANAGER_ADDRESS is not configured");
 
+  const safeLimit = Math.max(1, Math.min(Math.floor(limit), 50));
   const next = Number(await jobManager.nextJobId());
-  const start = Math.max(0, next - Math.min(limit, 50));
+  const start = Math.max(0, next - safeLimit);
   const jobs = [];
 
   for (let id = next - 1; id >= start; id--) {
