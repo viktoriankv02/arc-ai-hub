@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { config } from "./config.js";
-import { getChainStatus, getJob, getJobs, getRequest } from "./chain.js";
+import { getChainStatus, getJob, getJobs, getPlatformStats, getRequest } from "./chain.js";
 
 const app = express();
 app.use(cors());
@@ -13,6 +13,18 @@ app.get("/api/health", async (_req, res) => {
     res.json({ ok: true, service: "arc-ai-hub-backend", chain });
   } catch (error) {
     res.status(503).json({ ok: false, error: String(error) });
+  }
+});
+
+app.get("/api/stats", async (_req, res) => {
+  try {
+    const [chain, stats] = await Promise.all([
+      getChainStatus(),
+      getPlatformStats(),
+    ]);
+    res.json({ chain, ...stats });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
   }
 });
 
