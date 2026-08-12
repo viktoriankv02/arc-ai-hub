@@ -1,7 +1,17 @@
 import express from "express";
 import cors from "cors";
 import { config } from "./config.js";
-import { getChainStatus, getJob, getJobs, getPlatformStats, getRequest } from "./chain.js";
+import {
+  getAgent,
+  getAgents,
+  getChainStatus,
+  getJob,
+  getJobs,
+  getNode,
+  getNodes,
+  getPlatformStats,
+  getRequest,
+} from "./chain.js";
 
 const app = express();
 app.use(cors());
@@ -19,6 +29,9 @@ app.get("/api/health", async (_req, res) => {
       contracts: {
         jobManager: Boolean(config.jobManager),
         gateway: Boolean(config.gateway),
+        agentRegistry: Boolean(config.agentRegistry),
+        computePool: Boolean(config.computePool),
+        reputation: Boolean(config.reputation),
       },
     });
   } catch (error) {
@@ -32,6 +45,9 @@ app.get("/api/health", async (_req, res) => {
       contracts: {
         jobManager: Boolean(config.jobManager),
         gateway: Boolean(config.gateway),
+        agentRegistry: Boolean(config.agentRegistry),
+        computePool: Boolean(config.computePool),
+        reputation: Boolean(config.reputation),
       },
     });
   }
@@ -66,6 +82,40 @@ app.get("/api/jobs/:id", async (req, res) => {
 app.get("/api/requests/:id", async (req, res) => {
   try {
     res.json(await getRequest(req.params.id));
+  } catch (error) {
+    res.status(503).json({ error: String(error) });
+  }
+});
+
+app.get("/api/agents", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 20);
+    res.json(await getAgents(Number.isFinite(limit) ? limit : 20));
+  } catch (error) {
+    res.status(503).json({ error: String(error) });
+  }
+});
+
+app.get("/api/agents/:id", async (req, res) => {
+  try {
+    res.json(await getAgent(req.params.id));
+  } catch (error) {
+    res.status(503).json({ error: String(error) });
+  }
+});
+
+app.get("/api/nodes", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 20);
+    res.json(await getNodes(Number.isFinite(limit) ? limit : 20));
+  } catch (error) {
+    res.status(503).json({ error: String(error) });
+  }
+});
+
+app.get("/api/nodes/:id", async (req, res) => {
+  try {
+    res.json(await getNode(req.params.id));
   } catch (error) {
     res.status(503).json({ error: String(error) });
   }
