@@ -1,6 +1,6 @@
 import { network } from "hardhat";
 
-const { ethers } = await network.connect("arcTestnet");
+const { ethers } = await network.getOrCreate("arcTestnet");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
