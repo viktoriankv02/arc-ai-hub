@@ -7,10 +7,9 @@ export const chains: Record<ChainKey, ChainDefinition> = {
     key: "arc",
     name: "Arc Testnet",
     chainId: 5042002,
-    // dRPC is an Arc-documented fallback provider. Use it by default so
-    // MetaMask/browser requests do not hit the current 403 response from the
-    // primary public RPC endpoint.
-    rpcUrl: env("ARC_RPC_URL") || "https://rpc.drpc.testnet.arc.network",
+    // Use the public dRPC hostname that is currently listed as an Arc Testnet endpoint.
+    // ARC_RPC_URL can override it locally if needed.
+    rpcUrl: env("ARC_RPC_URL") || "https://arc-testnet.drpc.org",
     explorerUrl: "https://testnet.arcscan.app",
     nativeCurrency: "USDC",
     gatewayAddress: env("ARC_AI_API_GATEWAY_ADDRESS") || env("AI_API_GATEWAY_ADDRESS"),
@@ -53,6 +52,14 @@ export function getChains() {
     explorerUrl,
     nativeCurrency,
     configured: Boolean(gatewayAddress || jobManagerAddress || agentRegistryAddress || computePoolAddress),
+    // Expose addresses to the frontend so deployment configuration cannot drift
+    // from the backend configuration.
+    addresses: {
+      gateway: gatewayAddress || "",
+      jobManager: jobManagerAddress || "",
+      agentRegistry: agentRegistryAddress || "",
+      computePool: computePoolAddress || "",
+    },
     contracts: {
       gateway: Boolean(gatewayAddress),
       jobManager: Boolean(jobManagerAddress),
