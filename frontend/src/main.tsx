@@ -5,7 +5,11 @@ import "./styles.css";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 const GATEWAY_ADDRESS = import.meta.env.VITE_AI_API_GATEWAY_ADDRESS ?? "";
+const AGENT_REGISTRY_ADDRESS = import.meta.env.VITE_AI_AGENT_REGISTRY_ADDRESS ?? "";
 const gatewayAbi = ["function createRequest(uint256 serviceId,string payloadHash) returns (uint256)"];
+const agentRegistryAbi = [
+  "function registerAgent(string name,string description,string version,string endpoint) returns (uint256)",
+];
 const statusNames = ["Created", "Scheduled", "Running", "Finished", "Failed", "Cancelled"];
 const agentStatusNames = ["Inactive", "Active", "Deprecated"];
 const nodeStatusNames = ["Offline", "Online", "Busy", "Disabled"];
@@ -36,6 +40,11 @@ function App() {
   const [serviceId, setServiceId] = React.useState("1");
   const [payloadHash, setPayloadHash] = React.useState("");
   const [message, setMessage] = React.useState("");
+  const [agentName, setAgentName] = React.useState("");
+  const [agentDescription, setAgentDescription] = React.useState("");
+  const [agentVersion, setAgentVersion] = React.useState("1.0.0");
+  const [agentEndpoint, setAgentEndpoint] = React.useState("");
+  const [agentMessage, setAgentMessage] = React.useState("");
 
   const loadChains = React.useCallback(async () => {
     try {
@@ -176,6 +185,35 @@ function App() {
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
 
+  async function registerAgent() {
+    if (!wallet) return setAgentMessage("Спочатку підключи MetaMask");
+    if (selectedChain !== "arc") return setAgentMessage("Реєстрація Agent зараз доступна через Arc Testnet");
+    if (walletChainId !== 5042002) return setAgentMessage("Перемкни MetaMask на Arc Testnet (chain ID 5042002)");
+    if (!AGENT_REGISTRY_ADDRESS) return setAgentMessage("VITE_AI_AGENT_REGISTRY_ADDRESS не налаштований");
+    if (!agentName.trim()) return setAgentMessage("Введи назву Agent");
+    if (!agentEndpoint.trim()) return setAgentMessage("Введи endpoint Agent");
+
+    try {
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const signer = await provider.getSigner();
+      const registry = new ethers.Contract(AGENT_REGISTRY_ADDRESS, agentRegistryAbi, signer);
+      const tx = await registry.registerAgent(
+        agentName.trim(),
+        agentDescription.trim(),
+        agentVersion.trim() || "1.0.0",
+        agentEndpoint.trim(),
+      );
+      setAgentMessage(`Транзакція: ${tx.hash}`);
+      await tx.wait();
+      setAgentMessage("AI Agent зареєстровано on-chain");
+      setAgentName("");
+      setAgentDescription("");
+      setAgentVersion("1.0.0");
+      setAgentEndpoint("");
+      await load();
+    } catch (error) { setAgentMessage(error instanceof Error ? error.message : String(error)); }
+  }
+
   const activeChain = chains.find((item) => item.key === selectedChain);
   const walletOnSelectedChain = walletChainId === activeChain?.chainId;
 
@@ -195,6 +233,8 @@ function App() {
     </section>
 
     {diagnostic && <section className="panel"><strong>System diagnostic</strong><p className="message">{diagnostic}</p></section>}
+
+    <section className="panel"><h2>Register AI Agent</h2><div className="form"><input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Agent name" /><input value={agentDescription} onChange={(e) => setAgentDescription(e.target.value)} placeholder="Description" /><input value={agentVersion} onChange={(e) => setAgentVersion(e.target.value)} placeholder="Version" /><input value={agentEndpoint} onChange={(e) => setAgentEndpoint(e.target.value)} placeholder="Endpoint / API URL" /><button onClick={registerAgent}>Register Agent</button></div>{agentMessage && <p className="message">{agentMessage}</p>}</section>
 
     <section className="panel"><h2>Create AI Job</h2><div className="form"><input value={serviceId} onChange={(e) => setServiceId(e.target.value)} placeholder="Service / Agent ID" /><input value={payloadHash} onChange={(e) => setPayloadHash(e.target.value)} placeholder="Payload hash / CID" /><button onClick={createJob}>Create Job</button></div>{message && <p className="message">{message}</p>}</section>
 
