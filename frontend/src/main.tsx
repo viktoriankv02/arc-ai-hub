@@ -10,6 +10,7 @@ const statusNames = ["Created", "Scheduled", "Running", "Finished", "Failed", "C
 const agentStatusNames = ["Inactive", "Active", "Deprecated"];
 const nodeStatusNames = ["Offline", "Online", "Busy", "Disabled"];
 
+type Chain = { key: string; name: string; chainId: number; rpcUrl: string; explorerUrl: string; nativeCurrency: string; configured: boolean; contracts?: Record<string, boolean> };
 type Job = { id: string; user: string; agentId: string; computeNodeId: string; requestId: string; reward: string; createdAt: string; startedAt: string; finishedAt: string; status: number };
 type Agent = { id: string; name: string; description: string; version: string; endpoint: string; developer: string; status: number; verified: boolean };
 type Node = { id: string; owner: string; gpuModel: string; gpuMemory: number; cpuCores: number; ram: number; region: string; stake: string; reputation: string; completedJobs: string; failedJobs: string; status: number; totalReward: string; activeJobs: string; score: string };
@@ -19,6 +20,8 @@ function App() {
   const [status, setStatus] = React.useState("loading");
   const [chain, setChain] = React.useState("-");
   const [block, setBlock] = React.useState("-");
+  const [chains, setChains] = React.useState<Chain[]>([]);
+  const [selectedChain, setSelectedChain] = React.useState("arc");
   const [totalJobs, setTotalJobs] = React.useState("0");
   const [totalRequests, setTotalRequests] = React.useState("0");
   const [totalAgents, setTotalAgents] = React.useState("0");
@@ -29,9 +32,22 @@ function App() {
   const [chainOk, setChainOk] = React.useState(false);
   const [diagnostic, setDiagnostic] = React.useState("");
   const [wallet, setWallet] = React.useState("");
+  const [walletChainId, setWalletChainId] = React.useState(0);
   const [serviceId, setServiceId] = React.useState("1");
   const [payloadHash, setPayloadHash] = React.useState("");
   const [message, setMessage] = React.useState("");
+
+  const loadChains = React.useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/chains`);
+      if (!response.ok) throw new Error("Cannot load chain configuration");
+      const data: Chain[] = await response.json();
+      setChains(data);
+      if (!data.some((item) => item.key === selectedChain)) setSelectedChain(data[0]?.key ?? "arc");
+    } catch (error) {
+      setDiagnostic(error instanceof Error ? error.message : String(error));
+    }
+  }, [selectedChain]);
 
   const load = React.useCallback(async () => {
     try {
@@ -82,14 +98,20 @@ function App() {
     }
   }, []);
 
+  React.useEffect(() => { loadChains(); }, [loadChains]);
   React.useEffect(() => { load(); const timer = window.setInterval(load, 10000); return () => window.clearInterval(timer); }, [load]);
 
   React.useEffect(() => {
     const ethereum = (window as any).ethereum;
     if (!ethereum) return;
     const handleAccountsChanged = (accounts: string[]) => setWallet(accounts[0] ?? "");
+    const handleChainChanged = (chainId: string) => setWalletChainId(Number(BigInt(chainId)));
     ethereum.on?.("accountsChanged", handleAccountsChanged);
-    return () => ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
+    ethereum.on?.("chainChanged", handleChainChanged);
+    return () => {
+      ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
+      ethereum.removeListener?.("chainChanged", handleChainChanged);
+    };
   }, []);
 
   async function connectWallet() {
@@ -97,13 +119,46 @@ function App() {
     try {
       const provider = new ethers.BrowserProvider((window as any).ethereum);
       const accounts = await provider.send("eth_requestAccounts", []);
+      const network = await provider.getNetwork();
       setWallet(accounts[0] ?? "");
+      setWalletChainId(Number(network.chainId));
       setMessage("Wallet підключено");
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
 
+  async function switchNetwork() {
+    const target = chains.find((item) => item.key === selectedChain);
+    if (!target) return setMessage("Мережу не знайдено");
+    if (!(window as any).ethereum) return setMessage("MetaMask не знайдено");
+    try {
+      const ethereum = (window as any).ethereum;
+      const hexChainId = `0x${target.chainId.toString(16)}`;
+      await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChainId }] });
+      setWalletChainId(target.chainId);
+      setMessage(`MetaMask перемкнено на ${target.name}`);
+    } catch (error: any) {
+      if (error?.code === 4902) {
+        try {
+          await ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: `0x${target.chainId.toString(16)}`,
+              chainName: target.name,
+              rpcUrls: [target.rpcUrl],
+              blockExplorerUrls: target.explorerUrl ? [target.explorerUrl] : undefined,
+              nativeCurrency: { name: target.nativeCurrency, symbol: target.nativeCurrency, decimals: 18 },
+            }],
+          });
+          setWalletChainId(target.chainId);
+          setMessage(`${target.name} додано та вибрано в MetaMask`);
+        } catch (addError) { setMessage(addError instanceof Error ? addError.message : String(addError)); }
+      } else setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function createJob() {
     if (!wallet) return setMessage("Спочатку підключи MetaMask");
+    if (selectedChain !== "arc") return setMessage("Створення Job зараз доступне через Arc Testnet");
     if (!GATEWAY_ADDRESS) return setMessage("VITE_AI_API_GATEWAY_ADDRESS не налаштований");
     if (!payloadHash.trim()) return setMessage("Введи payload hash");
     try {
@@ -121,12 +176,17 @@ function App() {
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
 
+  const activeChain = chains.find((item) => item.key === selectedChain);
+  const walletOnSelectedChain = walletChainId === activeChain?.chainId;
+
   return <main className="app">
     <header className="header"><div><p className="eyebrow">ARC AI HUB</p><h1>AI coordination dashboard</h1><p className="subtitle">Agents · Jobs · Compute · Reputation · Billing</p></div>
       <div className="header-actions"><span className={`status ${status}`}>{status === "online" ? "Backend online" : status === "offline" ? "Backend offline" : "Connecting..."}</span><button onClick={connectWallet}>{wallet ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : "Connect MetaMask"}</button></div></header>
 
+    <section className="panel network-panel"><div className="panel-title"><h2>Network</h2><span>{wallet ? (walletOnSelectedChain ? "Wallet ready" : "Switch wallet") : "Wallet not connected"}</span></div><div className="form"><select value={selectedChain} onChange={(e) => setSelectedChain(e.target.value)}>{chains.map((item) => <option key={item.key} value={item.key}>{item.name} · {item.chainId}</option>)}</select><button onClick={switchNetwork} disabled={!wallet || !activeChain}>{walletOnSelectedChain ? `Connected: ${activeChain?.name ?? ""}` : `Switch to ${activeChain?.name ?? "network"}`}</button></div></section>
+
     <section className="grid">
-      <article className="card"><span>Network</span><strong>Arc Testnet</strong><small>Chain ID: {chain}</small></article>
+      <article className="card"><span>Network</span><strong>{activeChain?.name ?? "Arc Testnet"}</strong><small>Chain ID: {activeChain?.chainId ?? chain}</small></article>
       <article className="card"><span>Latest block</span><strong>{block}</strong><small>{chainOk ? "Live RPC" : "RPC unavailable"}</small></article>
       <article className="card"><span>Total agents</span><strong>{totalAgents}</strong><small>On-chain AgentRegistry</small></article>
       <article className="card"><span>Compute nodes</span><strong>{totalNodes}</strong><small>On-chain ComputePool</small></article>
