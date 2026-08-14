@@ -7,6 +7,9 @@ export const chains: Record<ChainKey, ChainDefinition> = {
     key: "arc",
     name: "Arc Testnet",
     chainId: 5042002,
+    // dRPC is an Arc-documented fallback provider. Use it by default so
+    // MetaMask/browser requests do not hit the current 403 response from the
+    // primary public RPC endpoint.
     rpcUrl: env("ARC_RPC_URL") || "https://rpc.drpc.testnet.arc.network",
     explorerUrl: "https://testnet.arcscan.app",
     nativeCurrency: "USDC",
