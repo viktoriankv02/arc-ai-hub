@@ -2,14 +2,18 @@
 pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../ai/AIScheduler.sol";
 import "../ai/AIAgentRuntimeV2.sol";
 import "../ai/AIComputePoolV2.sol";
 import "../ai/AIReputationOracleV2.sol";
 
 /// @title AIJobManagerV2
-/// @notice Secure orchestration pipeline: create -> schedule -> assign node -> run -> settle.
+/// @notice Secure orchestration pipeline with reward escrow and controller-based settlement.
 contract AIJobManagerV2 is Ownable {
+    using SafeERC20 for IERC20;
+
     enum JobStatus { Created, Scheduled, Running, Finished, Failed, Cancelled }
 
     struct Job {
@@ -25,6 +29,7 @@ contract AIJobManagerV2 is Ownable {
         JobStatus status;
     }
 
+    IERC20 public immutable rewardToken;
     uint256 public nextJobId;
     mapping(uint256 => Job) public jobs;
 
@@ -44,7 +49,10 @@ contract AIJobManagerV2 is Ownable {
 
     error NotGateway();
 
-    constructor(address initialOwner) Ownable(initialOwner) {}
+    constructor(address initialOwner, address token) Ownable(initialOwner) {
+        require(token != address(0), "Job: zero token");
+        rewardToken = IERC20(token);
+    }
 
     function setGateway(address gatewayAddress) external onlyOwner {
         require(gatewayAddress != address(0), "Job: zero gateway");
@@ -73,6 +81,7 @@ contract AIJobManagerV2 is Ownable {
 
     function _createJob(address user, uint256 agentId, uint256 requestId, uint256 reward) internal returns (uint256 jobId) {
         require(reward > 0, "Job: zero reward");
+        rewardToken.safeTransferFrom(user, address(this), reward);
         jobId = nextJobId++;
         jobs[jobId] = Job(jobId, user, agentId, type(uint256).max, requestId, reward, block.timestamp, 0, 0, JobStatus.Created);
         emit JobCreated(jobId, user, agentId, reward);
@@ -108,11 +117,13 @@ contract AIJobManagerV2 is Ownable {
         Job storage job = jobs[jobId];
         require(job.createdAt != 0, "Job: not found");
         require(job.status == JobStatus.Running, "Job: not running");
+        uint256 reward = job.reward;
         job.finishedAt = block.timestamp;
         job.status = JobStatus.Finished;
-        computePool.finishJob(jobId, job.computeNodeId, job.reward);
-        reputationOracle.processSuccessfulJob(job.agentId, job.reward);
-        emit JobFinished(jobId, job.computeNodeId, job.reward);
+        job.reward = 0;
+        computePool.finishJob(jobId, job.computeNodeId, reward);
+        reputationOracle.processSuccessfulJob(job.agentId, reward);
+        emit JobFinished(jobId, job.computeNodeId, reward);
     }
 
     function failJob(uint256 jobId) external onlyOwner {
@@ -120,8 +131,11 @@ contract AIJobManagerV2 is Ownable {
         require(job.createdAt != 0, "Job: not found");
         require(job.status == JobStatus.Running || job.status == JobStatus.Scheduled, "Job: bad status");
         bool wasRunning = job.status == JobStatus.Running;
+        uint256 refund = job.reward;
         job.status = JobStatus.Failed;
+        job.reward = 0;
         if (wasRunning) computePool.failJob(jobId, job.computeNodeId);
+        if (refund > 0) rewardToken.safeTransfer(job.user, refund);
         reputationOracle.processFailedJob(job.agentId);
         emit JobFailed(jobId, job.computeNodeId);
     }
