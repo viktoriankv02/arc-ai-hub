@@ -28,11 +28,13 @@ contract AIJobManagerV2 is Ownable {
     uint256 public nextJobId;
     mapping(uint256 => Job) public jobs;
 
+    address public gateway;
     AIScheduler public scheduler;
     AIAgentRuntimeV2 public runtime;
     AIComputePoolV2 public computePool;
     AIReputationOracleV2 public reputationOracle;
 
+    event GatewayUpdated(address indexed gateway);
     event ContractsConnected(address scheduler, address runtime, address computePool, address reputationOracle);
     event JobCreated(uint256 indexed jobId, address indexed user, uint256 indexed agentId, uint256 reward);
     event JobNodeAssigned(uint256 indexed jobId, uint256 indexed nodeId);
@@ -40,7 +42,15 @@ contract AIJobManagerV2 is Ownable {
     event JobFinished(uint256 indexed jobId, uint256 indexed nodeId, uint256 reward);
     event JobFailed(uint256 indexed jobId, uint256 indexed nodeId);
 
+    error NotGateway();
+
     constructor(address initialOwner) Ownable(initialOwner) {}
+
+    function setGateway(address gatewayAddress) external onlyOwner {
+        require(gatewayAddress != address(0), "Job: zero gateway");
+        gateway = gatewayAddress;
+        emit GatewayUpdated(gatewayAddress);
+    }
 
     function setContracts(address schedulerAddress, address runtimeAddress, address poolAddress, address oracleAddress) external onlyOwner {
         require(schedulerAddress != address(0) && runtimeAddress != address(0) && poolAddress != address(0) && oracleAddress != address(0), "Job: zero address");
@@ -56,11 +66,13 @@ contract AIJobManagerV2 is Ownable {
     }
 
     function createJobFromGateway(address user, uint256 agentId, uint256 requestId, uint256 reward) external returns (uint256 jobId) {
+        if (msg.sender != gateway) revert NotGateway();
         require(user != address(0), "Job: zero user");
         return _createJob(user, agentId, requestId, reward);
     }
 
     function _createJob(address user, uint256 agentId, uint256 requestId, uint256 reward) internal returns (uint256 jobId) {
+        require(reward > 0, "Job: zero reward");
         jobId = nextJobId++;
         jobs[jobId] = Job(jobId, user, agentId, type(uint256).max, requestId, reward, block.timestamp, 0, 0, JobStatus.Created);
         emit JobCreated(jobId, user, agentId, reward);
@@ -107,11 +119,9 @@ contract AIJobManagerV2 is Ownable {
         Job storage job = jobs[jobId];
         require(job.createdAt != 0, "Job: not found");
         require(job.status == JobStatus.Running || job.status == JobStatus.Scheduled, "Job: bad status");
+        bool wasRunning = job.status == JobStatus.Running;
         job.status = JobStatus.Failed;
-        if (job.computeNodeId != type(uint256).max && job.status == JobStatus.Failed) {
-            // The pool only has an active assignment after startJob.
-            if (job.startedAt != 0) computePool.failJob(jobId, job.computeNodeId);
-        }
+        if (wasRunning) computePool.failJob(jobId, job.computeNodeId);
         reputationOracle.processFailedJob(job.agentId);
         emit JobFailed(jobId, job.computeNodeId);
     }
