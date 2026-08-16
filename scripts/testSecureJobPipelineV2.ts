@@ -6,16 +6,22 @@ const MANAGER = process.env.AI_JOB_MANAGER_V2;
 const POOL = process.env.AI_COMPUTE_POOL_V2;
 const GATEWAY = process.env.AI_API_GATEWAY_V2;
 
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) external returns (bool)"
+];
+
 async function main() {
   const { ethers } = await network.connect("arcTestnet");
   const [owner] = await ethers.getSigners();
-  if (!MANAGER || !POOL || !GATEWAY) throw new Error("Set AI_JOB_MANAGER_V2, AI_COMPUTE_POOL_V2 and AI_API_GATEWAY_V2.");
+  if (!MANAGER || !POOL || !GATEWAY) {
+    throw new Error("Set AI_JOB_MANAGER_V2, AI_COMPUTE_POOL_V2 and AI_API_GATEWAY_V2.");
+  }
 
   const manager = await ethers.getContractAt("AIJobManagerV2", MANAGER);
   const pool = await ethers.getContractAt("AIComputePoolV2", POOL);
   const gateway = await ethers.getContractAt("AIAPIGatewayV2", GATEWAY);
   const runtime = await ethers.getContractAt("AIAgentRuntimeV2", RUNTIME);
-  const token = await ethers.getContractAt("IERC20", TOKEN);
+  const token = new ethers.Contract(TOKEN, ERC20_ABI, owner);
   const oracleAddress = await manager.reputationOracle();
   const oracle = await ethers.getContractAt("AIReputationOracleV2", oracleAddress);
   const reputationAddress = await oracle.reputation();
@@ -43,7 +49,7 @@ async function main() {
 
   const nextRequest = await gateway.nextRequestId();
   const requestTx = await gateway.createRequest(0, "sha256:test-ai-inference", reward);
-  const requestReceipt = await requestTx.wait();
+  await requestTx.wait();
   console.log("Request TX:", requestTx.hash);
   console.log("Request ID:", nextRequest.toString());
 
