@@ -62,7 +62,7 @@ async function main() {
 
   console.log("\n4. GATEWAY");
   console.log("---------------------------------");
-  console.log("Job manager:", (await gateway.jobManager()).getAddress ? await (await gateway.jobManager()).getAddress() : await gateway.jobManager());
+  console.log("Job manager:", await gateway.jobManager());
   console.log("Next request ID:", (await gateway.nextRequestId()).toString());
 
   console.log("\n=================================");
