@@ -1,0 +1,33 @@
+{
+  "network": "arcTestnet",
+  "chainId": 5042002,
+  "deployer": "0x3e46DE6fDe4565e999fBa1EB72e027E2894823B8",
+  "contracts": {
+    "AIToken": "0xCf9b53A409e6F899016F3b9E0E635Dd2A347B3a5",
+    "AIComputeRewards": "0xb5Df01141dA8c3DCD204A8675b8A25b1B283d0A2",
+    "AIComputePool": "0xe094faD07Ce56aF3E47c6a62021f34F4aF458DE0",
+    "AIReputation": "0x580c024910191C440ac611cE4699904E50952b3A",
+    "AIReputationOracle": "0xE0B8a94B8e35289f15B3ae54328cd690903a1C2A",
+    "AIScheduler": "0xC4274F6dDEa03c04F724B2e2dd9ea4AdFa9C4025",
+    "AIJobManager": "0x646903405E0672055835B849b556b9771c943032",
+    "AIAPIGateway": "0x77de4dFb7FBE932489E7Ef4fb591AC115eAe5A03",
+    "AIAgentRuntimeV1": "0x56A01003594432fed63f0dc1706c1382C342df6a",
+    "AIAgentRuntimeV2": "0xC98D7fFD4961573C41B2B115411074822D9D33bf"
+  },
+  "computeNode": {
+    "nodeId": 0,
+    "owner": "0x3e46DE6fDe4565e999fBa1EB72e027E2894823B8",
+    "gpuModel": "NVIDIA RTX 4090",
+    "gpuMemoryGB": 24,
+    "cpuCores": 16,
+    "ramGB": 64,
+    "region": "Ukraine",
+    "stakeAIH": 1000,
+    "reputation": 100,
+    "status": "Online"
+  },
+  "runtimeV2": {
+    "controller": "0x646903405E0672055835B849b556b9771c943032",
+    "controllerEnabled": true
+  }
+}
