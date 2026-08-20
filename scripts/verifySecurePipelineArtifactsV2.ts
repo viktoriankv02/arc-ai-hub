@@ -22,7 +22,7 @@ function selector(signature: string) {
 }
 
 async function main() {
-  const { ethers, artifacts } = await network.connect("arcTestnet");
+  const { ethers, artifacts } = await network.connect();
   const provider = ethers.provider;
 
   console.log("=================================");
