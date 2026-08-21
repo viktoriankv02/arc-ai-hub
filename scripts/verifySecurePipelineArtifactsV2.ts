@@ -1,5 +1,7 @@
 import { network } from "hardhat";
 import { keccak256, toUtf8Bytes } from "ethers";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const ADDR = {
   runtime: process.env.AI_AGENT_RUNTIME_V2 ?? "0xC98D7fFD4961573C41B2B115411074822D9D33bf",
@@ -21,8 +23,28 @@ function selector(signature: string) {
   return keccak256(toUtf8Bytes(signature)).slice(0, 10);
 }
 
+function readLocalRuntime(contractName: string): string {
+  const candidates = [
+    join(process.cwd(), "artifacts", "contracts", "ai", `${contractName}.sol`, `${contractName}.json`),
+    join(process.cwd(), "artifacts", "contracts", "core", `${contractName}.sol`, `${contractName}.json`),
+  ];
+
+  for (const path of candidates) {
+    try {
+      const artifact = JSON.parse(readFileSync(path, "utf8"));
+      if (typeof artifact.deployedBytecode === "string" && artifact.deployedBytecode.startsWith("0x")) {
+        return artifact.deployedBytecode;
+      }
+    } catch {
+      // Try the next known artifact location.
+    }
+  }
+
+  throw new Error(`Local artifact not found for ${contractName}. Run: npx hardhat compile`);
+}
+
 async function main() {
-  const { ethers, artifacts } = await network.connect();
+  const { ethers } = await network.connect();
   const provider = ethers.provider;
 
   console.log("=================================");
@@ -31,9 +53,8 @@ async function main() {
 
   for (const [key, contractName] of CONTRACTS) {
     const address = ADDR[key];
-    const artifact = await artifacts.readArtifact(contractName);
     const onChain = await provider.getCode(address);
-    const localRuntime = artifact.deployedBytecode;
+    const localRuntime = readLocalRuntime(contractName);
 
     console.log(`\n${contractName}`);
     console.log("---------------------------------");
@@ -56,6 +77,7 @@ async function main() {
     "isController(address)",
     "controllers(address)",
     "gateway()",
+    "scheduler()",
     "runtime()",
     "computePool()",
     "reputationOracle()",
