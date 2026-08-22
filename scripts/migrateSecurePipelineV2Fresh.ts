@@ -9,28 +9,56 @@ const OLD_ORACLE = process.env.AI_REPUTATION_ORACLE_V2_ADDRESS ?? "0xeAaB116532B
 const OLD_MANAGER = process.env.AI_JOB_MANAGER_V2_ADDRESS ?? "0x551a8Fa20486f53a446643F01788abf6cCC243A5";
 const GATEWAY = process.env.AI_API_GATEWAY_V2_ADDRESS ?? "0x3b2AAF5fbDc33Be0962C696cE2a4D9E82ebAe2c1";
 
-function artifactRuntime(contractPath: string) {
+function loadArtifact(contractPath: string) {
   const path = join(process.cwd(), "artifacts", "contracts", contractPath);
   const artifact = JSON.parse(readFileSync(path, "utf8"));
   if (!artifact.deployedBytecode || artifact.deployedBytecode === "0x") {
     throw new Error(`Missing deployedBytecode in ${path}. Run: npx hardhat clean; npx hardhat compile`);
   }
-  return artifact.deployedBytecode as string;
+  return artifact;
+}
+
+function normalizeImmutableBytes(bytecode: string, immutableReferences: Record<string, Array<{ start: number; length: number }>> | undefined) {
+  const bytes = Buffer.from(bytecode.slice(2), "hex");
+  for (const refs of Object.values(immutableReferences ?? {})) {
+    for (const ref of refs) {
+      bytes.fill(0, ref.start, ref.start + ref.length);
+    }
+  }
+  return `0x${bytes.toString("hex")}`;
 }
 
 async function assertBytecode(ethers: any, address: string, contractPath: string, label: string) {
   const onChain = await ethers.provider.getCode(address);
-  const local = artifactRuntime(contractPath);
+  const artifact = loadArtifact(contractPath);
+  const local = artifact.deployedBytecode as string;
+  const normalizedOnChain = normalizeImmutableBytes(onChain, artifact.immutableReferences);
+  const normalizedLocal = normalizeImmutableBytes(local, artifact.immutableReferences);
   const onChainHash = keccak256(onChain);
   const localHash = keccak256(local);
+  const normalizedOnChainHash = keccak256(normalizedOnChain);
+  const normalizedLocalHash = keccak256(normalizedLocal);
+
   console.log(`${label}:`);
   console.log(`  address: ${address}`);
   console.log(`  on-chain bytes: ${(onChain.length - 2) / 2}`);
   console.log(`  local bytes:    ${(local.length - 2) / 2}`);
   console.log(`  on-chain hash:  ${onChainHash}`);
   console.log(`  local hash:     ${localHash}`);
-  if (onChain.toLowerCase() !== local.toLowerCase()) {
-    throw new Error(`${label} bytecode mismatch`);
+
+  const immutableCount = Object.values(artifact.immutableReferences ?? {}).reduce(
+    (sum, refs) => sum + refs.length,
+    0,
+  );
+
+  if (immutableCount > 0) {
+    console.log(`  immutable regions: ${immutableCount}`);
+    console.log(`  normalized on-chain hash: ${normalizedOnChainHash}`);
+    console.log(`  normalized local hash:    ${normalizedLocalHash}`);
+  }
+
+  if (normalizedOnChain.toLowerCase() !== normalizedLocal.toLowerCase()) {
+    throw new Error(`${label} bytecode mismatch after immutable normalization`);
   }
 }
 
@@ -44,7 +72,6 @@ async function main() {
   console.log("Owner:", owner.address);
   console.log("Gateway:", GATEWAY);
 
-  // Read immutable dependencies from the currently deployed contracts.
   const oldPool = await ethers.getContractAt("AIComputePoolV2", OLD_POOL);
   const oldOracle = await ethers.getContractAt("AIReputationOracleV2", OLD_ORACLE);
   const oldManager = await ethers.getContractAt("AIJobManagerV2", OLD_MANAGER);
@@ -110,7 +137,6 @@ async function main() {
   console.log("Manager dependencies -> Scheduler/Runtime/Pool/Oracle");
   await (await manager.setContracts(scheduler, runtimeAddress, poolAddress, oracleAddress)).wait();
 
-  // Non-destructive verification before touching Gateway or Reputation ownership.
   console.log("\n6. PRE-CUTOVER VERIFICATION");
   console.log("---------------------------------");
   if (!(await runtime.isController(managerAddress))) throw new Error("Runtime controller was not configured");
