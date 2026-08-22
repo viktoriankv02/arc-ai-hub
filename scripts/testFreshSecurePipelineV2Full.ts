@@ -16,6 +16,8 @@ function assert(condition: boolean, message: string): asserts condition {
 async function sendRuntimeCall(runtime: any, signer: any, functionName: string, args: any[]) {
   const data = runtime.interface.encodeFunctionData(functionName, args);
   if (!data || data === "0x") throw new Error(`Failed to encode Runtime call ${functionName}`);
+  console.log(`${functionName} selector:`, data.slice(0, 10));
+  console.log(`${functionName} calldata bytes:`, (data.length - 2) / 2);
   const tx = await signer.sendTransaction({ to: await runtime.getAddress(), data });
   return tx.wait();
 }
@@ -59,11 +61,46 @@ async function main() {
 
   console.log("\n2. HEARTBEAT / AGENT OPERATIONS");
   console.log("---------------------------------");
+  const runtimeAddress = await runtime.getAddress();
+  const code = await ethers.provider.getCode(runtimeAddress);
+  console.log("Runtime code bytes:", (code.length - 2) / 2);
+  console.log("Runtime address:", runtimeAddress);
+  console.log("Runtime owner:", await runtime.owner());
+  console.log("Owner signer:", owner.address);
+
   const beforeHeartbeat = await runtime.getAgent(agentId);
+  console.log("Agent before heartbeat:", {
+    id: beforeHeartbeat.id.toString(),
+    owner: beforeHeartbeat.owner,
+    status: beforeHeartbeat.status.toString(),
+    heartbeat: beforeHeartbeat.heartbeat.toString(),
+    exists: beforeHeartbeat.exists,
+  });
+
   const heartbeatData = runtime.interface.encodeFunctionData("heartbeat", [agentId]);
   console.log("heartbeat selector:", heartbeatData.slice(0, 10));
+  console.log("heartbeat calldata bytes:", (heartbeatData.length - 2) / 2);
   assert(heartbeatData.length > 10, "heartbeat calldata was not encoded");
-  await (await owner.sendTransaction({ to: d.runtime, data: heartbeatData })).wait();
+
+  try {
+    const result = await ethers.provider.call({
+      to: runtimeAddress,
+      from: owner.address,
+      data: heartbeatData,
+    });
+    console.log("heartbeat eth_call: SUCCESS", result);
+  } catch (error: any) {
+    console.log("heartbeat eth_call: REVERT");
+    console.log("code:", error?.code);
+    console.log("data:", error?.data ?? error?.info?.error?.data ?? "none");
+    console.log("message:", error?.shortMessage ?? error?.message ?? "unknown");
+    throw new Error("heartbeat preflight reverted; inspect diagnostic output above");
+  }
+
+  const tx = await owner.sendTransaction({ to: runtimeAddress, data: heartbeatData });
+  console.log("heartbeat tx:", tx.hash);
+  await tx.wait();
+
   const afterHeartbeat = await runtime.getAgent(agentId);
   assert(afterHeartbeat.heartbeat >= beforeHeartbeat.heartbeat, "heartbeat did not advance");
   await sendRuntimeCall(runtime, owner, "pauseAgent", [agentId]);
