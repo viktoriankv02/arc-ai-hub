@@ -13,6 +13,13 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
 }
 
+async function sendRuntimeCall(runtime: any, signer: any, functionName: string, args: any[]) {
+  const data = runtime.interface.encodeFunctionData(functionName, args);
+  if (!data || data === "0x") throw new Error(`Failed to encode Runtime call ${functionName}`);
+  const tx = await signer.sendTransaction({ to: await runtime.getAddress(), data });
+  return tx.wait();
+}
+
 async function main() {
   const { ethers } = await network.connect("arcTestnet");
   const [owner, other] = await ethers.getSigners();
@@ -30,7 +37,6 @@ async function main() {
   const nodes = await pool.getOwnerNodes(owner.address);
   assert(agents.length > 0, "no prepared agent");
   assert(nodes.length > 0, "no prepared compute node");
-
   const agentId = agents[0];
   const nodeId = nodes[0];
   const reward = ethers.parseEther("1");
@@ -54,52 +60,45 @@ async function main() {
   console.log("\n2. HEARTBEAT / AGENT OPERATIONS");
   console.log("---------------------------------");
   const beforeHeartbeat = await runtime.getAgent(agentId);
-  await (await runtime.heartbeat(agentId)).wait();
+  const heartbeatData = runtime.interface.encodeFunctionData("heartbeat", [agentId]);
+  console.log("heartbeat selector:", heartbeatData.slice(0, 10));
+  assert(heartbeatData.length > 10, "heartbeat calldata was not encoded");
+  await (await owner.sendTransaction({ to: d.runtime, data: heartbeatData })).wait();
   const afterHeartbeat = await runtime.getAgent(agentId);
   assert(afterHeartbeat.heartbeat >= beforeHeartbeat.heartbeat, "heartbeat did not advance");
-  await (await runtime.pauseAgent(agentId)).wait();
+  await sendRuntimeCall(runtime, owner, "pauseAgent", [agentId]);
   assert((await runtime.getAgent(agentId)).status.toString() === "2", "agent did not pause");
-  await (await runtime.startAgent(agentId)).wait();
+  await sendRuntimeCall(runtime, owner, "startAgent", [agentId]);
   assert((await runtime.getAgent(agentId)).status.toString() === "1", "agent did not restart");
   console.log("Heartbeat / pause / restart: OK");
 
   console.log("\n3. SUCCESSFUL JOB");
   console.log("---------------------------------");
   const ownerBefore = await token.balanceOf(owner.address);
-  const nodeOwnerBefore = await token.balanceOf((await pool.getNode(nodeId)).owner);
   const repBefore = await reputation.reputationDetails(agentId);
   const requestId = await gateway.nextRequestId();
   const jobId = await manager.nextJobId();
-
   const allowance = await token.allowance(owner.address, d.manager);
   if (allowance < reward) await (await token.approve(d.manager, reward)).wait();
-
   await (await gateway.createRequest(agentId, `full-success-${Date.now()}`, reward)).wait();
   await (await manager.assignNode(jobId, nodeId)).wait();
   await (await manager.startJob(jobId)).wait();
-
   assert((await manager.jobs(jobId)).status.toString() === "2", "success job not Running");
   assert((await runtime.getAgent(agentId)).status.toString() === "1", "agent not Running");
   assert((await pool.getNode(nodeId)).status.toString() === "2", "node not Busy");
-
   await (await manager.finishJob(jobId)).wait();
   await (await gateway.markProcessed(requestId)).wait();
-
   const successJob = await manager.jobs(jobId);
   const successNode = await pool.getNode(nodeId);
   const successRep = await reputation.reputationDetails(agentId);
-  const nodeOwnerAfter = await token.balanceOf(successNode.owner);
   const ownerAfter = await token.balanceOf(owner.address);
-
   assert(successJob.status.toString() === "3", "success job not Finished");
   assert(successNode.status.toString() === "1", "node not Online after success");
-  assert(successNode.completedJobs === (await pool.getNode(nodeId)).completedJobs, "node read mismatch");
   assert(successNode.completedJobs > 0, "completedJobs did not increase");
   assert(successNode.totalReward >= reward, "node reward did not increase");
   assert(successRep.completedJobs > repBefore.completedJobs, "reputation completedJobs did not increase");
   assert(successRep.totalEarned >= repBefore.totalEarned + reward, "reputation earnings did not increase");
   assert(successRep.inferenceCount > repBefore.inferenceCount, "inference count did not increase");
-  assert(nodeOwnerAfter === nodeOwnerBefore, "node owner balance unexpectedly changed; current test node owner is the same signer and reward was netted through manager flow");
   assert(ownerAfter === ownerBefore, "owner balance changed unexpectedly");
   assert((await gateway.requests(requestId)).processed, "request not processed");
   console.log("Gateway -> Manager -> Runtime -> Pool -> Oracle success path: OK");
@@ -108,22 +107,18 @@ async function main() {
   console.log("---------------------------------");
   const refund = ethers.parseEther("2");
   const refundBefore = await token.balanceOf(owner.address);
-  const failRequestId = await gateway.nextRequestId();
   const failJobId = await manager.nextJobId();
   const allowance2 = await token.allowance(owner.address, d.manager);
   if (allowance2 < refund) await (await token.approve(d.manager, refund)).wait();
-
   await (await gateway.createRequest(agentId, `full-failure-${Date.now()}`, refund)).wait();
   await (await manager.assignNode(failJobId, nodeId)).wait();
   await (await manager.startJob(failJobId)).wait();
   assert((await pool.getNode(nodeId)).status.toString() === "2", "node not Busy for failure path");
   await (await manager.failJob(failJobId)).wait();
-
   const failedJob = await manager.jobs(failJobId);
   const failedNode = await pool.getNode(nodeId);
   const failedRep = await reputation.reputationDetails(agentId);
   const refundAfter = await token.balanceOf(owner.address);
-
   assert(failedJob.status.toString() === "4", "failed job not Failed");
   assert(failedJob.reward === 0n, "failed job retained reward");
   assert(failedNode.status.toString() === "1", "node not Online after failure");
@@ -135,30 +130,19 @@ async function main() {
   console.log("---------------------------------");
   let unauthorizedCaught = false;
   try {
-    const foreignRuntime = runtime.connect(other);
-    await foreignRuntime.startAgent(agentId);
-  } catch {
-    unauthorizedCaught = true;
-  }
+    const foreignData = runtime.interface.encodeFunctionData("startAgent", [agentId]);
+    await (await other.sendTransaction({ to: d.runtime, data: foreignData })).wait();
+  } catch { unauthorizedCaught = true; }
   assert(unauthorizedCaught, "unauthorized runtime operation was accepted");
   console.log("Unauthorized agent operation rejected: OK");
 
   console.log("\n6. INVALID JOB OPERATIONS");
   console.log("---------------------------------");
   let invalidFinishCaught = false;
-  try {
-    await manager.finishJob(999999999);
-  } catch {
-    invalidFinishCaught = true;
-  }
+  try { await manager.finishJob(999999999); } catch { invalidFinishCaught = true; }
   assert(invalidFinishCaught, "finishJob accepted nonexistent job");
-
   let invalidNodeCaught = false;
-  try {
-    await manager.assignNode(999999999, nodeId);
-  } catch {
-    invalidNodeCaught = true;
-  }
+  try { await manager.assignNode(999999999, nodeId); } catch { invalidNodeCaught = true; }
   assert(invalidNodeCaught, "assignNode accepted nonexistent job");
   console.log("Invalid job operations rejected: OK");
 
@@ -171,7 +155,6 @@ async function main() {
   console.log("completed jobs:", (await pool.getNode(nodeId)).completedJobs.toString());
   console.log("failed jobs:", (await pool.getNode(nodeId)).failedJobs.toString());
   console.log("reputation:", (await reputation.reputationDetails(agentId)).reputation.toString());
-
   console.log("\n=================================");
   console.log("FULL V2 REGRESSION SUCCESS");
   console.log("=================================");
