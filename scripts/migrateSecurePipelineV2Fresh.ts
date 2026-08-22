@@ -78,13 +78,13 @@ async function main() {
   const gateway = await ethers.getContractAt("AIAPIGatewayV2", GATEWAY);
 
   const rewardToken = await oldPool.rewardToken();
-  const reputation = await oldOracle.reputation();
+  const oldReputation = await oldOracle.reputation();
   const scheduler = await oldManager.scheduler();
 
   console.log("\nDEPENDENCIES");
   console.log("---------------------------------");
   console.log("Reward token:", rewardToken);
-  console.log("Reputation:", reputation);
+  console.log("Legacy reputation (kept untouched):", oldReputation);
   console.log("Scheduler:", scheduler);
   console.log("Current Gateway manager:", await gateway.jobManager());
 
@@ -104,15 +104,25 @@ async function main() {
   const poolAddress = await pool.getAddress();
   await assertBytecode(ethers, poolAddress, "ai/AIComputePoolV2.sol/AIComputePoolV2.json", "AIComputePoolV2");
 
-  console.log("\n3. DEPLOY FRESH REPUTATION ORACLE");
+  console.log("\n3. DEPLOY FRESH REPUTATION CONTRACT");
+  console.log("---------------------------------");
+  const Reputation = await ethers.getContractFactory("AIReputation");
+  const reputationContract = await Reputation.deploy(owner.address);
+  await reputationContract.waitForDeployment();
+  const reputationAddress = await reputationContract.getAddress();
+  await assertBytecode(ethers, reputationAddress, "ai/AIReputation.sol/AIReputation.json", "AIReputation");
+  console.log("Legacy reputation remains untouched:", oldReputation);
+  console.log("Fresh reputation:", reputationAddress);
+
+  console.log("\n4. DEPLOY FRESH REPUTATION ORACLE");
   console.log("---------------------------------");
   const Oracle = await ethers.getContractFactory("AIReputationOracleV2");
-  const oracle = await Oracle.deploy(reputation, owner.address);
+  const oracle = await Oracle.deploy(reputationAddress, owner.address);
   await oracle.waitForDeployment();
   const oracleAddress = await oracle.getAddress();
   await assertBytecode(ethers, oracleAddress, "ai/AIReputationOracleV2.sol/AIReputationOracleV2.json", "AIReputationOracleV2");
 
-  console.log("\n4. DEPLOY FRESH JOB MANAGER");
+  console.log("\n5. DEPLOY FRESH JOB MANAGER");
   console.log("---------------------------------");
   const Manager = await ethers.getContractFactory("AIJobManagerV2");
   const manager = await Manager.deploy(owner.address, rewardToken);
@@ -120,7 +130,7 @@ async function main() {
   const managerAddress = await manager.getAddress();
   await assertBytecode(ethers, managerAddress, "core/AIJobManagerV2.sol/AIJobManagerV2.json", "AIJobManagerV2");
 
-  console.log("\n5. CONFIGURE FRESH PIPELINE");
+  console.log("\n6. CONFIGURE FRESH PIPELINE");
   console.log("---------------------------------");
   console.log("Runtime controller -> Manager");
   await (await runtime.setController(managerAddress, true)).wait();
@@ -137,7 +147,7 @@ async function main() {
   console.log("Manager dependencies -> Scheduler/Runtime/Pool/Oracle");
   await (await manager.setContracts(scheduler, runtimeAddress, poolAddress, oracleAddress)).wait();
 
-  console.log("\n6. PRE-CUTOVER VERIFICATION");
+  console.log("\n7. PRE-CUTOVER VERIFICATION");
   console.log("---------------------------------");
   if (!(await runtime.isController(managerAddress))) throw new Error("Runtime controller was not configured");
   if (!(await pool.controllers(managerAddress))) throw new Error("Pool controller was not configured");
@@ -147,37 +157,36 @@ async function main() {
   if ((await manager.runtime()).toLowerCase() !== runtimeAddress.toLowerCase()) throw new Error("Manager runtime mismatch");
   if ((await manager.computePool()).toLowerCase() !== poolAddress.toLowerCase()) throw new Error("Manager pool mismatch");
   if ((await manager.reputationOracle()).toLowerCase() !== oracleAddress.toLowerCase()) throw new Error("Manager oracle mismatch");
+  if ((await oracle.reputation()).toLowerCase() !== reputationAddress.toLowerCase()) throw new Error("Oracle reputation mismatch");
   console.log("Runtime controller: OK");
   console.log("Pool controller: OK");
   console.log("Oracle controller: OK");
   console.log("Manager wiring: OK");
+  console.log("Fresh reputation wiring: OK");
 
-  console.log("\n7. REPUTATION OWNERSHIP CUTOVER");
+  console.log("\n8. FRESH REPUTATION OWNERSHIP CUTOVER");
   console.log("---------------------------------");
-  const reputationContract = await ethers.getContractAt("AIReputation", reputation);
   const reputationOwner = await reputationContract.owner();
-  console.log("Current reputation owner:", reputationOwner);
-  if (reputationOwner.toLowerCase() === oracleAddress.toLowerCase()) {
-    console.log("Already owned by fresh Oracle.");
-  } else if (reputationOwner.toLowerCase() === owner.address.toLowerCase()) {
-    await (await reputationContract.transferOwnership(oracleAddress)).wait();
-    console.log("Ownership transferred -> fresh Oracle.");
-  } else {
-    throw new Error(`Cannot transfer Reputation ownership from ${reputationOwner}. Expected signer or fresh Oracle.`);
+  console.log("Fresh reputation owner:", reputationOwner);
+  if (reputationOwner.toLowerCase() !== owner.address.toLowerCase()) {
+    throw new Error(`Unexpected fresh Reputation owner: ${reputationOwner}`);
   }
+  await (await reputationContract.transferOwnership(oracleAddress)).wait();
+  console.log("Fresh reputation ownership -> fresh Oracle: OK");
 
-  console.log("\n8. GATEWAY CUTOVER");
+  console.log("\n9. GATEWAY CUTOVER");
   console.log("---------------------------------");
   await (await gateway.setJobManager(managerAddress)).wait();
   console.log("Gateway -> fresh Manager: OK");
 
-  console.log("\n9. FINAL VERIFICATION");
+  console.log("\n10. FINAL VERIFICATION");
   console.log("---------------------------------");
   console.log("Runtime manager controller:", await runtime.isController(managerAddress));
   console.log("Pool manager controller:", await pool.controllers(managerAddress));
   console.log("Oracle manager controller:", await oracle.controllers(managerAddress));
   console.log("Manager gateway:", await manager.gateway());
   console.log("Gateway manager:", await gateway.jobManager());
+  console.log("Oracle reputation:", await oracle.reputation());
   console.log("Reputation owner:", await reputationContract.owner());
 
   const result = {
@@ -189,7 +198,8 @@ async function main() {
     manager: managerAddress,
     gateway: GATEWAY,
     rewardToken,
-    reputation,
+    reputation: reputationAddress,
+    legacyReputation: oldReputation,
     scheduler,
   };
 
