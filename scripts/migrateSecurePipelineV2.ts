@@ -109,6 +109,7 @@ async function main() {
   console.log("");
   console.log("5. CONNECT CONTRACTS");
   console.log("---------------------------------");
+
   console.log("Setting Runtime controller...");
   await (await runtime.setController(managerAddress, true)).wait();
 
@@ -133,7 +134,27 @@ async function main() {
   await (await gateway.setJobManager(managerAddress)).wait();
 
   console.log("");
-  console.log("6. VERIFY CONTROLLERS");
+  console.log("6. CONNECT REPUTATION OWNERSHIP");
+  console.log("---------------------------------");
+  const reputationContract = await ethers.getContractAt("AIReputation", reputation);
+  const reputationOwner = await reputationContract.owner();
+  console.log("Current reputation owner:", reputationOwner);
+
+  if (reputationOwner.toLowerCase() === oracleAddress.toLowerCase()) {
+    console.log("Reputation ownership already belongs to the new Oracle.");
+  } else if (reputationOwner.toLowerCase() === owner.address.toLowerCase()) {
+    console.log("Transferring Reputation ownership -> new Oracle...");
+    await (await reputationContract.transferOwnership(oracleAddress)).wait();
+  } else {
+    throw new Error(
+      `Cannot migrate Reputation ownership. Current owner is ${reputationOwner}, expected ${owner.address} or ${oracleAddress}.`,
+    );
+  }
+
+  console.log("Reputation owner after migration:", await reputationContract.owner());
+
+  console.log("");
+  console.log("7. VERIFY CONTROLLERS");
   console.log("---------------------------------");
   console.log("Runtime manager controller:", await runtime.isController(managerAddress));
   console.log("Pool manager controller:", await pool.controllers(managerAddress));
@@ -145,7 +166,7 @@ async function main() {
   console.log("Manager oracle:", await manager.reputationOracle());
 
   console.log("");
-  console.log("7. VERIFY BYTECODE");
+  console.log("8. VERIFY BYTECODE");
   console.log("---------------------------------");
   await assertRuntimeMatches(
     ethers,
