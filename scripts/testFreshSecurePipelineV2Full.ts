@@ -13,13 +13,39 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
 }
 
-async function sendRuntimeCall(runtime: any, signer: any, functionName: string, args: any[]) {
-  const data = runtime.interface.encodeFunctionData(functionName, args);
-  if (!data || data === "0x") throw new Error(`Failed to encode Runtime call ${functionName}`);
+async function runtimeLifecycleCall(runtime: any, signer: any, functionName: "pauseAgent" | "startAgent", agentId: any) {
+  const data = runtime.interface.encodeFunctionData(functionName, [agentId]);
   console.log(`${functionName} selector:`, data.slice(0, 10));
   console.log(`${functionName} calldata bytes:`, (data.length - 2) / 2);
-  const tx = await signer.sendTransaction({ to: await runtime.getAddress(), data });
-  return tx.wait();
+
+  try {
+    const result = await signer.provider.call({
+      to: await runtime.getAddress(),
+      from: signer.address,
+      data,
+    });
+    console.log(`${functionName} eth_call: SUCCESS`, result);
+  } catch (error: any) {
+    console.log(`${functionName} eth_call: REVERT`);
+    console.log("code:", error?.code);
+    console.log("data:", error?.data ?? error?.info?.error?.data ?? "none");
+    console.log("message:", error?.shortMessage ?? error?.message ?? "unknown");
+    throw error;
+  }
+
+  const populated = await runtime[functionName].populateTransaction(agentId);
+  assert(populated.to, `${functionName} transaction target missing`);
+  assert(populated.data && populated.data.length > 10, `${functionName} populated calldata missing`);
+  console.log(`${functionName} populated.to:`, populated.to);
+  console.log(`${functionName} populated bytes:`, (populated.data.length - 2) / 2);
+
+  const tx = await signer.sendTransaction({
+    to: populated.to,
+    data: populated.data,
+    gasLimit: 100_000n,
+  });
+  console.log(`${functionName} tx:`, tx.hash);
+  await tx.wait();
 }
 
 async function main() {
@@ -97,15 +123,16 @@ async function main() {
     throw new Error("heartbeat preflight reverted; inspect diagnostic output above");
   }
 
-  const tx = await owner.sendTransaction({ to: runtimeAddress, data: heartbeatData });
+  const tx = await owner.sendTransaction({ to: runtimeAddress, data: heartbeatData, gasLimit: 100_000n });
   console.log("heartbeat tx:", tx.hash);
   await tx.wait();
 
   const afterHeartbeat = await runtime.getAgent(agentId);
   assert(afterHeartbeat.heartbeat >= beforeHeartbeat.heartbeat, "heartbeat did not advance");
-  await sendRuntimeCall(runtime, owner, "pauseAgent", [agentId]);
+
+  await runtimeLifecycleCall(runtime, owner, "pauseAgent", agentId);
   assert((await runtime.getAgent(agentId)).status.toString() === "2", "agent did not pause");
-  await sendRuntimeCall(runtime, owner, "startAgent", [agentId]);
+  await runtimeLifecycleCall(runtime, owner, "startAgent", agentId);
   assert((await runtime.getAgent(agentId)).status.toString() === "1", "agent did not restart");
   console.log("Heartbeat / pause / restart: OK");
 
@@ -168,7 +195,7 @@ async function main() {
   let unauthorizedCaught = false;
   try {
     const foreignData = runtime.interface.encodeFunctionData("startAgent", [agentId]);
-    await (await other.sendTransaction({ to: d.runtime, data: foreignData })).wait();
+    await (await other.sendTransaction({ to: d.runtime, data: foreignData, gasLimit: 100_000n })).wait();
   } catch { unauthorizedCaught = true; }
   assert(unauthorizedCaught, "unauthorized runtime operation was accepted");
   console.log("Unauthorized agent operation rejected: OK");
