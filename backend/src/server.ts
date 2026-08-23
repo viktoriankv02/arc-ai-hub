@@ -53,12 +53,32 @@ app.get("/api/nodes/:id", async (req, res) => {
   try { res.json(await getNode(req.params.id)); } catch (error) { res.status(503).json({ error: String(error) }); }
 });
 
-/** V2.1 off-chain execution boundary. The next increment will bind this worker to on-chain jobs. */
+/** V2.1 off-chain execution boundary. Safe mock/local inference endpoint. */
 app.post("/api/ai/execute", async (req, res) => {
   try {
     const result = await aiWorker.execute(req.body as AIExecutionRequest);
     res.status(200).json({ ok: true, result });
   } catch (error) {
+    res.status(400).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * V2.1 full execution boundary.
+ *
+ * Flow:
+ *   AI inference -> Gateway request -> Manager job -> node assignment
+ *   -> job start -> job finish -> Gateway request processed.
+ *
+ * The executor signer must be the deployed contract owner for the current
+ * testnet Manager V2, because assign/start/finish are owner-authorized.
+ */
+app.post("/api/ai/execute-onchain", async (req, res) => {
+  try {
+    const result = await aiWorker.executeOnChain(req.body as AIExecutionRequest);
+    res.status(200).json({ ok: true, result });
+  } catch (error) {
+    console.error("/api/ai/execute-onchain failed:", error);
     res.status(400).json({ ok: false, error: String(error) });
   }
 });
