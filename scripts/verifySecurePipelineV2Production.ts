@@ -55,8 +55,10 @@ async function main() {
         ADDRESSES.gateway
     );
 
+    // IMPORTANT: the deployed V2 manager must be bound to its V2 ABI.
+    // Using the legacy AIJobManager ABI hides V2 getters such as gateway().
     const manager = await ethers.getContractAt(
-        "AIJobManager",
+        "AIJobManagerV2",
         ADDRESSES.manager
     );
 
@@ -127,14 +129,11 @@ async function main() {
     console.log("3. CONTROLLERS");
     console.log("---------------------------------");
 
-    // Runtime V2 exposes an explicit isController() view.
     check(
         await runtime.isController(ADDRESSES.manager),
         "Runtime controller = Manager"
     );
 
-    // Pool V2 and Oracle V2 expose their controller registry as a public
-    // mapping (`controllers(address)`), not an isController() function.
     check(
         await pool.controllers(ADDRESSES.manager),
         "Pool controller = Manager"
@@ -215,20 +214,9 @@ async function main() {
     console.log("Heartbeat:", agent.heartbeat.toString());
     console.log("Version:", agent.version);
 
-    check(
-        agent.exists,
-        "Agent #0 exists"
-    );
-
-    check(
-        same(agent.owner, owner.address),
-        "Agent owner matches deployer"
-    );
-
-    check(
-        agent.status === 1n,
-        "Agent #0 is Running"
-    );
+    check(agent.exists, "Agent #0 exists");
+    check(same(agent.owner, owner.address), "Agent owner matches deployer");
+    check(agent.status === 1n, "Agent #0 is Running");
 
     console.log("");
 
@@ -245,20 +233,9 @@ async function main() {
     console.log("Failed jobs:", node.failedJobs.toString());
     console.log("Active jobs:", node.activeJobs.toString());
 
-    check(
-        same(node.owner, owner.address),
-        "Node owner matches deployer"
-    );
-
-    check(
-        node.stake > 0n,
-        "Compute node has positive stake"
-    );
-
-    check(
-        node.status === 1n,
-        "Compute node is available/online"
-    );
+    check(same(node.owner, owner.address), "Node owner matches deployer");
+    check(node.stake > 0n, "Compute node has positive stake");
+    check(node.status === 1n, "Compute node is available/online");
 
     console.log("");
 
@@ -271,15 +248,8 @@ async function main() {
     console.log("Next request ID:", nextRequestId.toString());
     console.log("Next job ID:", nextJobId.toString());
 
-    check(
-        nextRequestId >= 3n,
-        "Gateway contains successful regression requests"
-    );
-
-    check(
-        nextJobId >= 3n,
-        "Manager contains successful regression jobs"
-    );
+    check(nextRequestId >= 3n, "Gateway contains successful regression requests");
+    check(nextJobId >= 3n, "Manager contains successful regression jobs");
 
     console.log("");
 
@@ -290,10 +260,7 @@ async function main() {
 
     console.log("Oracle reputation:", reputationAddress);
 
-    check(
-        same(reputationAddress, ADDRESSES.reputation),
-        "Oracle -> Reputation"
-    );
+    check(same(reputationAddress, ADDRESSES.reputation), "Oracle -> Reputation");
 
     console.log("");
 
