@@ -89,8 +89,8 @@ export class OnChainAIExecutor {
     const expectedRequestId = await this.gateway.nextRequestId();
     const expectedJobId = await this.manager.nextJobId();
 
-    let requestId: bigint = expectedRequestId;
-    let jobId: bigint = expectedJobId;
+    let requestId = expectedRequestId;
+    let jobId = expectedJobId;
     let startedOnChain = false;
 
     try {
@@ -114,8 +114,6 @@ export class OnChainAIExecutor {
       await startTx.wait();
       startedOnChain = true;
 
-      // Inference has already completed successfully off-chain. Finalize the matching
-      // on-chain job and let the deployed Manager V2 update pool/reputation state.
       const finishTx = await this.manager.finishJob(jobId);
       await finishTx.wait();
 
@@ -157,4 +155,11 @@ export class OnChainAIExecutor {
   }
 }
 
-export const onChainAIExecutor = new OnChainAIExecutor();
+export async function executeOnChainAI(
+  request: AIExecutionRequest,
+  inference: AIExecutionResult,
+): Promise<OnChainExecutionResult> {
+  // Lazy construction keeps the ordinary /api/ai/execute mock endpoint usable
+  // without exposing or requiring the executor private key.
+  return new OnChainAIExecutor().execute(request, inference);
+}
