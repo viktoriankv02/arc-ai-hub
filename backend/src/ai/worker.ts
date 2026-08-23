@@ -1,5 +1,6 @@
 import { MockInferenceProvider } from "./providers.js";
-import type { AIExecutionRequest, AIExecutionResult, InferenceProvider } from "./types.js";
+import { executeOnChainAI } from "./onchainExecutor.js";
+import type { AIExecutionRequest, AIExecutionResult, InferenceProvider, OnChainExecutionResult } from "./types.js";
 
 export class AIWorker {
   constructor(private readonly provider: InferenceProvider = new MockInferenceProvider()) {}
@@ -18,10 +19,20 @@ export class AIWorker {
     }
 
     return this.provider.execute({
+      ...request,
       model: request.model.trim(),
       input: request.input,
       parameters: request.parameters ?? {},
     });
+  }
+
+  async executeOnChain(request: AIExecutionRequest): Promise<{
+    inference: AIExecutionResult;
+    onChain: OnChainExecutionResult;
+  }> {
+    const inference = await this.execute(request);
+    const onChain = await executeOnChainAI(request, inference);
+    return { inference, onChain };
   }
 }
 
