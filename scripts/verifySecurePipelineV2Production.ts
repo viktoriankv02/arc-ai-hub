@@ -127,18 +127,21 @@ async function main() {
     console.log("3. CONTROLLERS");
     console.log("---------------------------------");
 
+    // Runtime V2 exposes an explicit isController() view.
     check(
         await runtime.isController(ADDRESSES.manager),
         "Runtime controller = Manager"
     );
 
+    // Pool V2 and Oracle V2 expose their controller registry as a public
+    // mapping (`controllers(address)`), not an isController() function.
     check(
-        await pool.isController(ADDRESSES.manager),
+        await pool.controllers(ADDRESSES.manager),
         "Pool controller = Manager"
     );
 
     check(
-        await oracle.isController(ADDRESSES.manager),
+        await oracle.controllers(ADDRESSES.manager),
         "Oracle controller = Manager"
     );
 
