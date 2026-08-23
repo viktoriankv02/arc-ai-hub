@@ -2,17 +2,9 @@ import express from "express";
 import cors from "cors";
 import { config } from "./config.js";
 import { getChains } from "./chains/index.js";
-import {
-  getAgent,
-  getAgents,
-  getChainStatus,
-  getJob,
-  getJobs,
-  getNode,
-  getNodes,
-  getPlatformStats,
-  getRequest,
-} from "./chain.js";
+import { getAgent, getAgents, getChainStatus, getJob, getJobs, getNode, getNodes, getPlatformStats, getRequest } from "./chain.js";
+import { aiWorker } from "./ai/worker.js";
+import type { AIExecutionRequest } from "./ai/types.js";
 
 const app = express();
 app.use(cors());
@@ -59,6 +51,16 @@ app.get("/api/nodes", async (req, res) => {
 });
 app.get("/api/nodes/:id", async (req, res) => {
   try { res.json(await getNode(req.params.id)); } catch (error) { res.status(503).json({ error: String(error) }); }
+});
+
+/** V2.1 off-chain execution boundary. The next increment will bind this worker to on-chain jobs. */
+app.post("/api/ai/execute", async (req, res) => {
+  try {
+    const result = await aiWorker.execute(req.body as AIExecutionRequest);
+    res.status(200).json({ ok: true, result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error) });
+  }
 });
 
 app.listen(config.port, () => console.log(`ARC AI Hub backend listening on http://localhost:${config.port}`));
