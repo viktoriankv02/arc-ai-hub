@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+.venv/
+.env
+arc_ai_hub.db
+node_modules/
+dist/

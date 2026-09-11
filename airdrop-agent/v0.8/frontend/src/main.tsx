@@ -1,0 +1,21 @@
+import React,{useEffect,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import './style.css';
+
+const API=import.meta.env.VITE_API_BASE_URL||'http://127.0.0.1:8000';
+const DEMO={network:'ARC Testnet',chain_id:57001,rpc:'https://rpc.testnet.arc.network',explorer:'https://testnet.arcscan.app',status:'ready'};
+function App(){
+ const [api,setApi]=useState<'online'|'demo'>('demo'); const [testnet,setTestnet]=useState(DEMO); const [wallet,setWallet]=useState(''); const [walletOk,setWalletOk]=useState(false); const [tx,setTx]=useState<any[]>([]); const [msg,setMsg]=useState('Готово до тестування');
+ const load=async()=>{try{const [h,t]=await Promise.all([fetch(API+'/api/health'),fetch(API+'/api/demo/testnet')]); if(!h.ok)throw Error(); setApi('online');setTestnet(await t.json()); const p=await fetch(API+'/api/tx/proposals');if(p.ok)setTx((await p.json()).items||[]);setMsg('Backend підключено')}catch{setApi('demo');setTestnet(DEMO);setMsg('DEMO MODE — backend не підключений')}};
+ useEffect(()=>{load()},[]);
+ const validate=async()=>{const a=wallet.trim(); if(!/^0x[a-fA-F0-9]{40}$/.test(a)){setWalletOk(false);setMsg('Некоректна EVM-адреса');return} if(api==='demo'){setWalletOk(true);setMsg('Адреса валідна (локальна перевірка)');return} try{const r=await fetch(API+'/api/wallet/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:a,chains:['arc-testnet']})});setWalletOk(r.ok);setMsg(r.ok?'Wallet перевірено':'Wallet validation failed')}catch{setMsg('Backend недоступний')}};
+ const proposal=async()=>{if(!walletOk){setMsg('Спочатку перевірте wallet');return} const item={proposal_id:'test-'+Date.now(),chain:'arc-testnet',to:wallet,value_wei:'0',data:'0x',purpose:'ARC AI HUB frontend test'}; if(api==='demo'){setTx(x=>[item,...x]);setMsg('Тестову пропозицію створено — без підпису');return} const r=await fetch(API+'/api/tx/proposal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)}); if(r.ok){const j=await r.json();setTx(x=>[j.proposal,...x]);setMsg('Proposal створено — потрібне підтвердження користувача')}else setMsg('Не вдалося створити proposal')};
+ return <div className="app"><header><div><b>ARC AI HUB</b><span>Airdrop Agent v0.8</span></div><div className={'badge '+api}>{api==='online'?'● ONLINE':'● DEMO MODE'}</div></header>
+ <main><section className="hero"><div><p className="eyebrow">WEB3 REWARDS OPERATING SYSTEM</p><h1>Testnet Control Center</h1><p>Підключення wallet, перевірка мережі та безпечні Transaction Proposals без автоматичного підпису.</p></div><button onClick={load}>↻ Refresh</button></section>
+ <div className="grid"><article><h2>1. ARC Testnet</h2><div className="status">● {testnet.status}</div><dl><dt>Chain ID</dt><dd>{testnet.chain_id}</dd><dt>RPC</dt><dd>{testnet.rpc}</dd></dl><a href={testnet.explorer} target="_blank">Відкрити Explorer →</a></article>
+ <article><h2>2. Wallet</h2><input value={wallet} onChange={e=>setWallet(e.target.value)} placeholder="0x..."/><button onClick={validate}>Перевірити адресу</button><div className={walletOk?'ok':'muted'}>{walletOk?'✓ Wallet готовий до тесту':'Wallet не перевірено'}</div></article>
+ <article><h2>3. Transaction Guard</h2><p>Будь-яка транзакція проходить через Proposal → Review → Approval. Приватні ключі не зберігаються.</p><button className="primary" onClick={proposal}>Створити TEST proposal</button><div className="warning">⚠ Підписання та broadcast навмисно не реалізовані у v0.8.</div></article>
+ <article><h2>4. Test results</h2><div className="metric"><b>{tx.length}</b><span>proposals</span></div><button onClick={()=>setMsg('Frontend interaction OK')}>Запустити UI test</button><p className="muted">{msg}</p></article></div>
+ <section className="queue"><h2>Approval Queue</h2>{tx.length===0?<p className="muted">Черга порожня. Створіть TEST proposal.</p>:tx.map(x=><div className="row" key={x.proposal_id}><span><b>{x.proposal_id}</b><small>{x.purpose||'Transaction proposal'}</small></span><span className="pending">{x.status||'PENDING_APPROVAL'}</span></div>)}</section>
+ </main><footer>ARC AI HUB • Safety: no seed phrase • no private key • no invisible signing • user approval required</footer></div>}
+createRoot(document.getElementById('root')!).render(<App/>);

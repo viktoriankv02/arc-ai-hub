@@ -1,0 +1,36 @@
+name: ARC AI HUB Frontend
+on:
+  push:
+    branches: [release/airdrop-agent-v0.8]
+    paths: ['airdrop-agent/v0.8/frontend/**','.github/workflows/airdrop-agent-pages.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        working-directory: airdrop-agent/v0.8/frontend
+        run: npm install
+      - name: Build
+        working-directory: airdrop-agent/v0.8/frontend
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: airdrop-agent/v0.8/frontend/dist
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
