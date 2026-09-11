@@ -4,8 +4,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from wallet_adapter import CHAINS, normalize_address, wallet_status
-from transaction_guard import make_proposal
+from .wallet_adapter import CHAINS, normalize_address, wallet_status
+from .transaction_guard import make_proposal
 
 app = FastAPI(title='ARC AI HUB Airdrop Agent v0.8', version='0.8.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
