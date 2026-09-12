@@ -9,10 +9,11 @@ from .browser_actions import build_browser_execution_plan
 from .discovery_pipeline import run_discovery_pipeline
 from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity, prepare_task, record_feedback
 from .execution_engine import build_execution_plan
+from .opportunity_intelligence import enrich_opportunities, research_opportunity
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.7')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.8')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -24,12 +25,12 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.9.7', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.9.8', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
     items = get_opportunities()
-    return {'total': len(items),'high_score': sum(1 for x in items if int(x.get('opportunity_score', 0)) >= 70),'testnets': sum(1 for x in items if str(x.get('category', '')).upper() == 'TESTNET'),'airdrops': sum(1 for x in items if str(x.get('category', '')).upper() == 'AIR_DROP'),'approval_tasks': sum(1 for x in items for t in (x.get('tasks') or []) if t.get('approval_required'))}
+    return {'total': len(items),'high_score': sum(1 for x in items if int(x.get('opportunity_score', 0)) >= 70),'testnets': sum(1 for x in items if str(x.get('category', '')).upper() == 'TESTNET'),'airdrops': sum(1 for x in items if str(x.get('category', '')).upper() == 'AIR_DROP'),'approval_tasks': sum(1 for x in items for t in (x.get('tasks') or []) if t.get('approval_required')),'high_priority': sum(1 for x in items if x.get('review_status') == 'HIGH_PRIORITY'),'low_confidence': sum(1 for x in items if x.get('review_status') == 'LOW_CONFIDENCE')}
 
 @app.get('/api/hunter/agents')
 def agents(): return {'agents': agent_catalog()}
@@ -51,13 +52,21 @@ def scan(): return run_discovery_pipeline()
 
 @app.get('/api/hunter/opportunities')
 def opportunities(category: str | None = Query(default=None), min_score: int = Query(default=0, ge=0, le=100), status: str | None = Query(default=None)):
-    return {'items': get_opportunities(category=category, min_score=min_score, status=status)}
+    return {'items': enrich_opportunities(get_opportunities(category=category, min_score=min_score, status=status))}
 
 @app.get('/api/hunter/opportunities/{opportunity_id}')
 def opportunity(opportunity_id: str):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
+    item = dict(item); item['research'] = item.get('research') or research_opportunity(item)
+    item['research_confidence'] = item['research']['research_confidence']; item['review_status'] = item['research']['review_status']
     return item
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/research')
+def research(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return research_opportunity(item)
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/analyze')
 def analyze(opportunity_id: str):
