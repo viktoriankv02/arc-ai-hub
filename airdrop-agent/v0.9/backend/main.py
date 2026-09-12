@@ -9,8 +9,9 @@ from .drop_hunter import (
     prepare_task, record_feedback, scan_sources,
 )
 from .execution_engine import build_execution_plan
+from .browser_actions import build_browser_execution_plan
 
-app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.1")
+app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class FeedbackRequest(BaseModel):
@@ -22,7 +23,7 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.1", "mode": "drop-hunter"}
+def health(): return {"ok": True, "version": "0.9.2", "mode": "drop-hunter"}
 
 @app.get("/api/hunter/stats")
 def stats():
@@ -61,6 +62,12 @@ def execution_plan(opportunity_id: str):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, "Opportunity not found")
     return build_execution_plan(item)
+
+@app.get("/api/hunter/opportunities/{opportunity_id}/browser-plan")
+def browser_plan(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, "Opportunity not found")
+    return build_browser_execution_plan(item)
 
 @app.post("/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/prepare")
 def prepare(opportunity_id: str, task_id: str):
