@@ -10,8 +10,9 @@ from .drop_hunter import (
 )
 from .execution_engine import build_execution_plan
 from .browser_actions import build_browser_execution_plan
+from .agent_memory import build_memory_summary
 
-app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.2")
+app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.3")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class FeedbackRequest(BaseModel):
@@ -23,7 +24,7 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.2", "mode": "drop-hunter"}
+def health(): return {"ok": True, "version": "0.9.3", "mode": "drop-hunter"}
 
 @app.get("/api/hunter/stats")
 def stats():
@@ -38,6 +39,9 @@ def stats():
 
 @app.get("/api/hunter/agents")
 def agents(): return {"agents": agent_catalog()}
+
+@app.get("/api/hunter/memory")
+def memory(): return build_memory_summary()
 
 @app.post("/api/hunter/scan")
 def scan(): return scan_sources()
