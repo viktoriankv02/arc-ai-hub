@@ -8,8 +8,9 @@ from .drop_hunter import (
     agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity,
     prepare_task, record_feedback, scan_sources,
 )
+from .execution_engine import build_execution_plan
 
-app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.0")
+app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class FeedbackRequest(BaseModel):
@@ -21,7 +22,7 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.0", "mode": "drop-hunter"}
+def health(): return {"ok": True, "version": "0.9.1", "mode": "drop-hunter"}
 
 @app.get("/api/hunter/stats")
 def stats():
@@ -55,6 +56,12 @@ def analyze(opportunity_id: str):
     try: return analyze_opportunity(opportunity_id)
     except KeyError as exc: raise HTTPException(404, str(exc))
 
+@app.get("/api/hunter/opportunities/{opportunity_id}/execution-plan")
+def execution_plan(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, "Opportunity not found")
+    return build_execution_plan(item)
+
 @app.post("/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/prepare")
 def prepare(opportunity_id: str, task_id: str):
     try: return prepare_task(opportunity_id, task_id)
@@ -73,6 +80,7 @@ def execution_policy():
     return {
         "automatic": ["public_read", "eligibility_check", "task_parsing", "scoring", "reminders", "proof_recording"],
         "approval_required": ["wallet_connection", "signature", "transaction", "spending_funds", "authenticated_social_action", "claim", "contract_deployment"],
+        "user_only": ["captcha", "seed_phrase", "private_key", "2fa", "exchange_password"],
         "never_store": ["seed_phrase", "private_key", "exchange_password", "2fa_secret"],
     }
 
