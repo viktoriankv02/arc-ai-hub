@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from .agent_memory import build_memory_summary
 from .browser_actions import build_browser_execution_plan
+from .browser_executor import execute_dry_run
 from .drop_hunter import (
     agent_catalog,
     analyze_opportunity,
@@ -19,7 +20,7 @@ from .drop_hunter import (
 from .execution_engine import build_execution_plan
 from .source_registry import source_catalog
 
-app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.4")
+app = FastAPI(title="ARC AI HUB Drop Hunter", version="0.9.5")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -33,9 +34,13 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 
+class BrowserDryRunRequest(BaseModel):
+    approved: bool = False
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "version": "0.9.4", "mode": "drop-hunter"}
+    return {"ok": True, "version": "0.9.5", "mode": "drop-hunter", "browser_execution": "dry-run"}
 
 
 @app.get("/api/hunter/stats")
@@ -111,6 +116,17 @@ def browser_plan(opportunity_id: str):
     return build_browser_execution_plan(item)
 
 
+@app.post("/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/browser-dry-run")
+def browser_dry_run(opportunity_id: str, task_id: str, req: BrowserDryRunRequest):
+    item = get_opportunity(opportunity_id)
+    if not item:
+        raise HTTPException(404, "Opportunity not found")
+    task = next((t for t in item.get("tasks") or [] if t.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return execute_dry_run(task, approved=req.approved)
+
+
 @app.post("/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/prepare")
 def prepare(opportunity_id: str, task_id: str):
     try:
@@ -139,6 +155,7 @@ def execution_policy():
         "approval_required": ["wallet_connection", "signature", "transaction", "spending_funds", "authenticated_social_action", "claim", "contract_deployment"],
         "user_only": ["captcha", "seed_phrase", "private_key", "2fa", "exchange_password"],
         "never_store": ["seed_phrase", "private_key", "exchange_password", "2fa_secret"],
+        "browser_execution": "dry-run-only",
     }
 
 
