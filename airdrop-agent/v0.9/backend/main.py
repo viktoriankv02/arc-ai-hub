@@ -7,19 +7,12 @@ from pydantic import BaseModel, Field
 from .agent_memory import build_memory_summary
 from .browser_actions import build_browser_execution_plan
 from .discovery_pipeline import run_discovery_pipeline
-from .drop_hunter import (
-    agent_catalog,
-    analyze_opportunity,
-    approve_task,
-    get_opportunities,
-    get_opportunity,
-    prepare_task,
-    record_feedback,
-)
+from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity, prepare_task, record_feedback
 from .execution_engine import build_execution_plan
 from .source_registry import source_catalog
+from .task_adapters import adapter_catalog, classify_action
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.6')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.7')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -31,24 +24,24 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.9.6', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.9.7', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
     items = get_opportunities()
-    return {
-        'total': len(items),
-        'high_score': sum(1 for x in items if int(x.get('opportunity_score', 0)) >= 70),
-        'testnets': sum(1 for x in items if str(x.get('category', '')).upper() == 'TESTNET'),
-        'airdrops': sum(1 for x in items if str(x.get('category', '')).upper() == 'AIR_DROP'),
-        'approval_tasks': sum(1 for x in items for t in (x.get('tasks') or []) if t.get('approval_required')),
-    }
+    return {'total': len(items),'high_score': sum(1 for x in items if int(x.get('opportunity_score', 0)) >= 70),'testnets': sum(1 for x in items if str(x.get('category', '')).upper() == 'TESTNET'),'airdrops': sum(1 for x in items if str(x.get('category', '')).upper() == 'AIR_DROP'),'approval_tasks': sum(1 for x in items for t in (x.get('tasks') or []) if t.get('approval_required'))}
 
 @app.get('/api/hunter/agents')
 def agents(): return {'agents': agent_catalog()}
 
 @app.get('/api/hunter/sources')
 def sources(): return {'sources': source_catalog()}
+
+@app.get('/api/hunter/adapters')
+def adapters(): return {'adapters': adapter_catalog()}
+
+@app.post('/api/hunter/tasks/classify')
+def classify_task(task: dict): return classify_action(task)
 
 @app.get('/api/hunter/memory')
 def memory(): return build_memory_summary()
@@ -98,12 +91,7 @@ def feedback(req: FeedbackRequest): return {'ok': True, 'record': record_feedbac
 
 @app.get('/api/hunter/execution-policy')
 def execution_policy():
-    return {
-        'automatic': ['public_read', 'eligibility_check', 'task_parsing', 'scoring', 'reminders', 'proof_recording'],
-        'approval_required': ['wallet_connection', 'signature', 'transaction', 'spending_funds', 'authenticated_social_action', 'claim', 'contract_deployment'],
-        'user_only': ['captcha', 'seed_phrase', 'private_key', '2fa', 'exchange_password'],
-        'never_store': ['seed_phrase', 'private_key', 'exchange_password', '2fa_secret'],
-    }
+    return {'automatic': ['public_read','eligibility_check','task_parsing','scoring','reminders','proof_recording'],'approval_required': ['wallet_connection','signature','transaction','spending_funds','authenticated_social_action','claim','contract_deployment'],'user_only': ['captcha','seed_phrase','private_key','2fa','exchange_password'],'never_store': ['seed_phrase','private_key','exchange_password','2fa_secret']}
 
 @app.get('/api/hunter/contract-lab/chains')
 def contract_lab_chains():
