@@ -9,6 +9,7 @@ from .browser_actions import build_browser_execution_plan
 from .browser_session import adapter_health, build_session_launch_plan
 from .discovery_pipeline import run_discovery_pipeline
 from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity, prepare_task, record_feedback
+from .execution_coordinator import begin_execution, build_execution_context, complete_execution, reconcile_reward
 from .execution_engine import build_execution_plan
 from .opportunity_intelligence import enrich_opportunities, research_opportunity
 from .proof_engine import build_proof_summary, record_proof, record_reward_event, reward_events, task_proofs
@@ -16,9 +17,9 @@ from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 from .task_intelligence import enrich_tasks, task_fingerprint
 from .task_orchestrator import sync_opportunity, sync_task
-from .task_state_machine import get_task_state, list_task_states, recover_task, state_summary, transition_task
+from .task_state_machine import get_task_state, recover_task, state_summary, transition_task
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.12.0')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.13.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -47,8 +48,16 @@ class StateTransitionRequest(BaseModel):
     target: str = Field(min_length=1, max_length=40)
     reason: str = Field(default='', max_length=1000)
 
+class ExecutionStartRequest(BaseModel):
+    approved: bool = False
+
+class ExecutionResultRequest(BaseModel):
+    verified: bool = False
+    proof_kind: str = 'EXECUTION_RESULT'
+    result: dict = Field(default_factory=dict)
+
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.12.0', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.13.0', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -116,8 +125,7 @@ def session_plan(opportunity_id: str, task_id: str):
     if not item: raise HTTPException(404, 'Opportunity not found')
     task = next((t for t in (item.get('tasks') or []) if t.get('id') == task_id), None)
     if not task: raise HTTPException(404, 'Task not found')
-    target = str(task.get('url') or item.get('official_url') or '')
-    return build_session_launch_plan(target, task)
+    return build_session_launch_plan(str(task.get('url') or item.get('official_url') or ''), task)
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/proof')
 def proofs(opportunity_id: str, task_id: str | None = Query(default=None)):
@@ -146,9 +154,38 @@ def add_reward_event(opportunity_id: str, req: RewardRequest):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
     result = record_reward_event(opportunity_id, req.task_id, req.event_type, req.amount, req.asset, req.tx_hash, req.note)
-    if req.task_id:
-        sync_task(opportunity_id, req.task_id)
+    if req.task_id: sync_task(opportunity_id, req.task_id)
     return result
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/execution-context')
+def execution_context(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    try: return build_execution_context(item, task_id)
+    except KeyError as exc: raise HTTPException(404, str(exc))
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/execute/start')
+def execution_start(opportunity_id: str, task_id: str, req: ExecutionStartRequest):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    try: return begin_execution(item, task_id, req.approved)
+    except KeyError as exc: raise HTTPException(404, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/execute/result')
+def execution_result(opportunity_id: str, task_id: str, req: ExecutionResultRequest):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    try: return complete_execution(item, task_id, {**req.result, 'verified': req.verified, 'proof_kind': req.proof_kind})
+    except KeyError as exc: raise HTTPException(404, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/reward-reconcile')
+def reward_reconcile(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    try: return reconcile_reward(item, task_id)
+    except KeyError as exc: raise HTTPException(404, str(exc))
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
 def task_state(opportunity_id: str, task_id: str):
@@ -171,8 +208,7 @@ def sync_one_task(opportunity_id: str, task_id: str):
 def sync_all_tasks(opportunity_id: str):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
-    ids = [str(t.get('id')) for t in (item.get('tasks') or [])]
-    return sync_opportunity(opportunity_id, ids)
+    return sync_opportunity(opportunity_id, [str(t.get('id')) for t in (item.get('tasks') or [])])
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
 def change_task_state(opportunity_id: str, task_id: str, req: StateTransitionRequest):
