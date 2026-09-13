@@ -11,11 +11,12 @@ from .discovery_pipeline import run_discovery_pipeline
 from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity, prepare_task, record_feedback
 from .execution_engine import build_execution_plan
 from .opportunity_intelligence import enrich_opportunities, research_opportunity
+from .proof_engine import build_proof_summary, record_proof, record_reward_event, reward_events, task_proofs
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 from .task_intelligence import enrich_tasks, task_fingerprint
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.9')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.10.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -26,8 +27,22 @@ class FeedbackRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     approved: bool
 
+class ProofRequest(BaseModel):
+    task_id: str
+    kind: str = Field(min_length=1, max_length=60)
+    status: str = Field(default='RECORDED', min_length=1, max_length=30)
+    evidence: dict = Field(default_factory=dict)
+
+class RewardRequest(BaseModel):
+    task_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=60)
+    amount: str = ''
+    asset: str = ''
+    tx_hash: str = ''
+    note: str = Field(default='', max_length=2000)
+
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.9.9', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.10.0', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -72,6 +87,7 @@ def opportunity(opportunity_id: str):
     item['research'] = item.get('research') or research_opportunity(item)
     item['research_confidence'] = item['research']['research_confidence']
     item['review_status'] = item['research']['review_status']
+    item['proof_summary'] = build_proof_summary(opportunity_id)
     return item
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/research')
@@ -94,6 +110,32 @@ def session_plan(opportunity_id: str, task_id: str):
     if not task: raise HTTPException(404, 'Task not found')
     target = str(task.get('url') or item.get('official_url') or '')
     return build_session_launch_plan(target, task)
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/proof')
+def proofs(opportunity_id: str, task_id: str | None = Query(default=None)):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return {'summary': build_proof_summary(opportunity_id), 'proofs': task_proofs(opportunity_id, task_id)}
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/proof')
+def add_proof(opportunity_id: str, req: ProofRequest):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
+    if req.task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    return record_proof(opportunity_id, req.task_id, req.kind, req.evidence, req.status)
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/rewards')
+def rewards(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return {'opportunity_id': opportunity_id, 'events': reward_events(opportunity_id)}
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/rewards')
+def add_reward_event(opportunity_id: str, req: RewardRequest):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return record_reward_event(opportunity_id, req.task_id, req.event_type, req.amount, req.asset, req.tx_hash, req.note)
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/analyze')
 def analyze(opportunity_id: str):
