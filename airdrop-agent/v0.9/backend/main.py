@@ -6,14 +6,16 @@ from pydantic import BaseModel, Field
 
 from .agent_memory import build_memory_summary
 from .browser_actions import build_browser_execution_plan
+from .browser_session import adapter_health, build_session_launch_plan
 from .discovery_pipeline import run_discovery_pipeline
 from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_opportunities, get_opportunity, prepare_task, record_feedback
 from .execution_engine import build_execution_plan
 from .opportunity_intelligence import enrich_opportunities, research_opportunity
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
+from .task_intelligence import enrich_tasks, task_fingerprint
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.8')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.9.9')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -25,7 +27,7 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.9.8', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.9.9', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -41,8 +43,15 @@ def sources(): return {'sources': source_catalog()}
 @app.get('/api/hunter/adapters')
 def adapters(): return {'adapters': adapter_catalog()}
 
+@app.get('/api/hunter/adapters/health')
+def adapters_health(): return {'adapters': adapter_health(adapter_catalog())}
+
 @app.post('/api/hunter/tasks/classify')
 def classify_task(task: dict): return classify_action(task)
+
+@app.post('/api/hunter/tasks/fingerprint')
+def fingerprint_task(payload: dict):
+    return task_fingerprint(str(payload.get('project') or 'unknown'), payload.get('task') or {}, int(payload.get('index') or 0))
 
 @app.get('/api/hunter/memory')
 def memory(): return build_memory_summary()
@@ -58,8 +67,11 @@ def opportunities(category: str | None = Query(default=None), min_score: int = Q
 def opportunity(opportunity_id: str):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
-    item = dict(item); item['research'] = item.get('research') or research_opportunity(item)
-    item['research_confidence'] = item['research']['research_confidence']; item['review_status'] = item['research']['review_status']
+    item = dict(item)
+    item['tasks'] = enrich_tasks(str(item.get('project') or 'unknown'), item.get('tasks') or [])
+    item['research'] = item.get('research') or research_opportunity(item)
+    item['research_confidence'] = item['research']['research_confidence']
+    item['review_status'] = item['research']['review_status']
     return item
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/research')
@@ -67,6 +79,21 @@ def research(opportunity_id: str):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
     return research_opportunity(item)
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/tasks-intelligence')
+def tasks_intelligence(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return {'opportunity_id': opportunity_id, 'project': item.get('project'), 'tasks': enrich_tasks(str(item.get('project') or 'unknown'), item.get('tasks') or [])}
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/session-plan/{task_id}')
+def session_plan(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    task = next((t for t in (item.get('tasks') or []) if t.get('id') == task_id), None)
+    if not task: raise HTTPException(404, 'Task not found')
+    target = str(task.get('url') or item.get('official_url') or '')
+    return build_session_launch_plan(target, task)
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/analyze')
 def analyze(opportunity_id: str):
@@ -100,7 +127,7 @@ def feedback(req: FeedbackRequest): return {'ok': True, 'record': record_feedbac
 
 @app.get('/api/hunter/execution-policy')
 def execution_policy():
-    return {'automatic': ['public_read','eligibility_check','task_parsing','scoring','reminders','proof_recording'],'approval_required': ['wallet_connection','signature','transaction','spending_funds','authenticated_social_action','claim','contract_deployment'],'user_only': ['captcha','seed_phrase','private_key','2fa','exchange_password'],'never_store': ['seed_phrase','private_key','exchange_password','2fa_secret']}
+    return {'automatic': ['public_read','eligibility_check','task_parsing','scoring','reminders','proof_recording'],'approval_required': ['wallet_connection','signature','transaction','spending_funds','authenticated_social_action','claim','contract_deployment','authenticated_browser_submit'],'user_only': ['captcha','seed_phrase','private_key','2fa','exchange_password'],'never_store': ['seed_phrase','private_key','exchange_password','2fa_secret','session_credentials']}
 
 @app.get('/api/hunter/contract-lab/chains')
 def contract_lab_chains():
