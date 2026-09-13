@@ -15,9 +15,10 @@ from .proof_engine import build_proof_summary, record_proof, record_reward_event
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 from .task_intelligence import enrich_tasks, task_fingerprint
+from .task_orchestrator import sync_opportunity, sync_task
 from .task_state_machine import get_task_state, list_task_states, recover_task, state_summary, transition_task
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.11.0')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.12.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -47,7 +48,7 @@ class StateTransitionRequest(BaseModel):
     reason: str = Field(default='', max_length=1000)
 
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.11.0', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.12.0', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -93,6 +94,7 @@ def opportunity(opportunity_id: str):
     item['research_confidence'] = item['research']['research_confidence']
     item['review_status'] = item['research']['review_status']
     item['proof_summary'] = build_proof_summary(opportunity_id)
+    sync_opportunity(opportunity_id, [str(t.get('id')) for t in (item.get('tasks') or [])])
     item['state_summary'] = state_summary(opportunity_id)
     return item
 
@@ -129,7 +131,9 @@ def add_proof(opportunity_id: str, req: ProofRequest):
     if not item: raise HTTPException(404, 'Opportunity not found')
     valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
     if req.task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
-    return record_proof(opportunity_id, req.task_id, req.kind, req.evidence, req.status)
+    result = record_proof(opportunity_id, req.task_id, req.kind, req.evidence, req.status)
+    sync_task(opportunity_id, req.task_id)
+    return result
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/rewards')
 def rewards(opportunity_id: str):
@@ -141,7 +145,10 @@ def rewards(opportunity_id: str):
 def add_reward_event(opportunity_id: str, req: RewardRequest):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
-    return record_reward_event(opportunity_id, req.task_id, req.event_type, req.amount, req.asset, req.tx_hash, req.note)
+    result = record_reward_event(opportunity_id, req.task_id, req.event_type, req.amount, req.asset, req.tx_hash, req.note)
+    if req.task_id:
+        sync_task(opportunity_id, req.task_id)
+    return result
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
 def task_state(opportunity_id: str, task_id: str):
@@ -149,7 +156,23 @@ def task_state(opportunity_id: str, task_id: str):
     if not item: raise HTTPException(404, 'Opportunity not found')
     valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
     if task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    sync_task(opportunity_id, task_id)
     return get_task_state(opportunity_id, task_id)
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/sync')
+def sync_one_task(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
+    if task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    return sync_task(opportunity_id, task_id)
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/sync')
+def sync_all_tasks(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    ids = [str(t.get('id')) for t in (item.get('tasks') or [])]
+    return sync_opportunity(opportunity_id, ids)
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
 def change_task_state(opportunity_id: str, task_id: str, req: StateTransitionRequest):
