@@ -15,8 +15,9 @@ from .proof_engine import build_proof_summary, record_proof, record_reward_event
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 from .task_intelligence import enrich_tasks, task_fingerprint
+from .task_state_machine import get_task_state, list_task_states, recover_task, state_summary, transition_task
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.10.0')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.11.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -41,8 +42,12 @@ class RewardRequest(BaseModel):
     tx_hash: str = ''
     note: str = Field(default='', max_length=2000)
 
+class StateTransitionRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=40)
+    reason: str = Field(default='', max_length=1000)
+
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.10.0', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.11.0', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -88,6 +93,7 @@ def opportunity(opportunity_id: str):
     item['research_confidence'] = item['research']['research_confidence']
     item['review_status'] = item['research']['review_status']
     item['proof_summary'] = build_proof_summary(opportunity_id)
+    item['state_summary'] = state_summary(opportunity_id)
     return item
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/research')
@@ -136,6 +142,38 @@ def add_reward_event(opportunity_id: str, req: RewardRequest):
     item = get_opportunity(opportunity_id)
     if not item: raise HTTPException(404, 'Opportunity not found')
     return record_reward_event(opportunity_id, req.task_id, req.event_type, req.amount, req.asset, req.tx_hash, req.note)
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
+def task_state(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
+    if task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    return get_task_state(opportunity_id, task_id)
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/state')
+def change_task_state(opportunity_id: str, task_id: str, req: StateTransitionRequest):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
+    if task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    try: return transition_task(opportunity_id, task_id, req.target, req.reason)
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@app.post('/api/hunter/opportunities/{opportunity_id}/tasks/{task_id}/recover')
+def recover_task_state(opportunity_id: str, task_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    valid_tasks = {str(t.get('id')) for t in (item.get('tasks') or [])}
+    if task_id not in valid_tasks: raise HTTPException(404, 'Task not found')
+    try: return recover_task(opportunity_id, task_id)
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/states')
+def all_task_states(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if not item: raise HTTPException(404, 'Opportunity not found')
+    return state_summary(opportunity_id)
 
 @app.post('/api/hunter/opportunities/{opportunity_id}/analyze')
 def analyze(opportunity_id: str):
