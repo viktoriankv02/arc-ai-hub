@@ -1,4 +1,4 @@
-from reward_policy import is_confirmed_reward, is_cost_event, reward_transition_allowed
+from backend.reward_policy import is_confirmed_reward, is_cost_event, reward_transition_allowed
 
 
 def test_only_confirmed_positive_reward_allows_terminal_reward_transition():
