@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dedupe import deduplicate_opportunities
-from pnl_engine import portfolio_pnl
+from backend.dedupe import deduplicate_opportunities
+from backend.pnl_engine import portfolio_pnl
 
 
 def test_dedupe_preserves_cross_source_evidence():
@@ -54,7 +54,7 @@ def test_portfolio_pnl_exposes_asset_totals(monkeypatch):
             'by_asset': {'USDT': '40'},
         },
     }
-    monkeypatch.setattr('pnl_engine.build_reward_ledger', lambda opportunity_id: ledgers[opportunity_id])
+    monkeypatch.setattr('backend.pnl_engine.build_reward_ledger', lambda opportunity_id: ledgers[opportunity_id])
     result = portfolio_pnl([{'id': 'a', 'project': 'A'}, {'id': 'b', 'project': 'B'}])
     assert result['gross_received'] == '150'
     assert result['total_spent'] == '30'
