@@ -5,21 +5,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .opportunity_engine import get_opportunity, list_opportunities
 from .wallet_adapter import CHAINS, normalize_address, wallet_status
 from .transaction_guard import make_proposal
 
 app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 DATA = Path(__file__).resolve().parent / "data"
 DATA.mkdir(exist_ok=True)
@@ -44,12 +39,7 @@ def rpc_call(chain: str, method: str, params: list):
     if config is None:
         raise KeyError(f"Unsupported chain: {chain}")
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    request = urllib.request.Request(
-        config.rpc_url,
-        data=payload,
-        headers={"Content-Type": "application/json", "User-Agent": "ARC-AI-HUB/0.9"},
-        method="POST",
-    )
+    request = urllib.request.Request(config.rpc_url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ARC-AI-HUB/0.9"}, method="POST")
     with urllib.request.urlopen(request, timeout=8) as response:
         body = json.loads(response.read().decode("utf-8"))
     if "error" in body:
@@ -103,15 +93,7 @@ def inspect_wallet(req: WalletInspectRequest):
         balance_hex = rpc_call(chain, "eth_getBalance", [address, "latest"])
         chain_id_hex = rpc_call(chain, "eth_chainId", [])
         balance_wei = int(balance_hex, 16)
-        return {
-            "ok": True,
-            "address": address,
-            "chain": chain,
-            "chain_id": int(chain_id_hex, 16),
-            "block_number": int(block_hex, 16),
-            "balance_wei": str(balance_wei),
-            "balance_native": balance_wei / 10**18,
-        }
+        return {"ok": True, "address": address, "chain": chain, "chain_id": int(chain_id_hex, 16), "block_number": int(block_hex, 16), "balance_wei": str(balance_wei), "balance_native": balance_wei / 10**18}
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
     except (urllib.error.URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as e:
@@ -126,16 +108,22 @@ def testnet_status():
         block_hex = rpc_call(chain, "eth_blockNumber", [])
         expected = CHAINS[chain].chain_id
         actual = int(chain_id_hex, 16)
-        return {
-            "ok": actual == expected,
-            "network": CHAINS[chain].name,
-            "chain_id": actual,
-            "expected_chain_id": expected,
-            "block_number": int(block_hex, 16),
-            "rpc": CHAINS[chain].rpc_url,
-        }
+        return {"ok": actual == expected, "network": CHAINS[chain].name, "chain_id": actual, "expected_chain_id": expected, "block_number": int(block_hex, 16), "rpc": CHAINS[chain].rpc_url}
     except (KeyError, urllib.error.URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as e:
         raise HTTPException(502, f"Testnet RPC unavailable: {e}")
+
+
+@app.get("/api/opportunities")
+def opportunities(category: str | None = Query(default=None), chain: str | None = Query(default=None), max_cost: float | None = Query(default=None, ge=0)):
+    return {"items": list_opportunities(category=category, chain=chain, max_cost=max_cost)}
+
+
+@app.get("/api/opportunities/{opportunity_id}")
+def opportunity(opportunity_id: str):
+    item = get_opportunity(opportunity_id)
+    if item is None:
+        raise HTTPException(404, "Opportunity not found")
+    return {"opportunity": item}
 
 
 @app.post("/api/tx/proposal")
@@ -166,10 +154,4 @@ def proposal(proposal_id: str):
 
 @app.get("/api/demo/testnet")
 def demo_testnet():
-    return {
-        "network": "ARC Testnet",
-        "chain_id": 57001,
-        "rpc": "https://rpc.testnet.arc.network",
-        "explorer": "https://testnet.arcscan.app",
-        "status": "ready",
-    }
+    return {"network": "ARC Testnet", "chain_id": 57001, "rpc": "https://rpc.testnet.arc.network", "explorer": "https://testnet.arcscan.app", "status": "ready"}
