@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from .proof_engine import reward_events, task_proofs
+from .reward_policy import reward_transition_allowed
 from .task_state_machine import get_task_state, transition_task
-
-CONFIRMED_REWARDS = {'RECEIVED', 'CLAIMED', 'REWARDED', 'CONFIRMED', 'CLAIM_CONFIRMED'}
 
 
 def sync_task_from_proof(opportunity_id: str, task_id: str) -> dict[str, Any]:
@@ -22,11 +21,11 @@ def sync_task_from_proof(opportunity_id: str, task_id: str) -> dict[str, Any]:
 def sync_task_from_reward(opportunity_id: str, task_id: str) -> dict[str, Any]:
     state = get_task_state(opportunity_id, task_id)
     events = [x for x in reward_events(opportunity_id) if str(x.get('task_id') or '') == task_id]
-    confirmed = [x for x in events if str(x.get('event_type', '')).upper() in CONFIRMED_REWARDS]
+    confirmed = [x for x in events if reward_transition_allowed([x])]
     if confirmed and state['state'] == 'REWARD_PENDING':
-        updated = transition_task(opportunity_id, task_id, 'REWARDED', 'reward engine confirmed reward event')
-        return {'changed': True, 'state': updated, 'reason': 'reward_confirmed'}
-    return {'changed': False, 'state': state, 'reason': 'reward_not_ready'}
+        updated = transition_task(opportunity_id, task_id, 'REWARDED', 'reward policy confirmed positive reward event')
+        return {'changed': True, 'state': updated, 'reason': 'reward_confirmed', 'confirmed_rewards': confirmed}
+    return {'changed': False, 'state': state, 'reason': 'reward_not_ready', 'confirmed_rewards': []}
 
 
 def sync_task(opportunity_id: str, task_id: str) -> dict[str, Any]:
