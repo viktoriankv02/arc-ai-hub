@@ -12,14 +12,16 @@ from .drop_hunter import agent_catalog, analyze_opportunity, approve_task, get_o
 from .execution_coordinator import begin_execution, build_execution_context, complete_execution, reconcile_reward
 from .execution_engine import build_execution_plan
 from .opportunity_intelligence import enrich_opportunities, research_opportunity
+from .pnl_engine import opportunity_pnl, portfolio_pnl
 from .proof_engine import build_proof_summary, record_proof, record_reward_event, reward_events, task_proofs
+from .reward_ledger import build_portfolio_ledger, build_reward_ledger
 from .source_registry import source_catalog
 from .task_adapters import adapter_catalog, classify_action
 from .task_intelligence import enrich_tasks, task_fingerprint
 from .task_orchestrator import sync_opportunity, sync_task
 from .task_state_machine import get_task_state, recover_task, state_summary, transition_task
 
-app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.13.0')
+app = FastAPI(title='ARC AI HUB Drop Hunter', version='0.14.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class FeedbackRequest(BaseModel):
@@ -57,7 +59,7 @@ class ExecutionResultRequest(BaseModel):
     result: dict = Field(default_factory=dict)
 
 @app.get('/api/health')
-def health(): return {'ok': True, 'version': '0.13.0', 'mode': 'drop-hunter'}
+def health(): return {'ok': True, 'version': '0.14.0', 'mode': 'drop-hunter'}
 
 @app.get('/api/hunter/stats')
 def stats():
@@ -66,32 +68,29 @@ def stats():
 
 @app.get('/api/hunter/agents')
 def agents(): return {'agents': agent_catalog()}
-
 @app.get('/api/hunter/sources')
 def sources(): return {'sources': source_catalog()}
-
 @app.get('/api/hunter/adapters')
 def adapters(): return {'adapters': adapter_catalog()}
-
 @app.get('/api/hunter/adapters/health')
 def adapters_health(): return {'adapters': adapter_health(adapter_catalog())}
-
 @app.post('/api/hunter/tasks/classify')
 def classify_task(task: dict): return classify_action(task)
-
 @app.post('/api/hunter/tasks/fingerprint')
-def fingerprint_task(payload: dict):
-    return task_fingerprint(str(payload.get('project') or 'unknown'), payload.get('task') or {}, int(payload.get('index') or 0))
-
+def fingerprint_task(payload: dict): return task_fingerprint(str(payload.get('project') or 'unknown'), payload.get('task') or {}, int(payload.get('index') or 0))
 @app.get('/api/hunter/memory')
 def memory(): return build_memory_summary()
-
 @app.post('/api/hunter/scan')
 def scan(): return run_discovery_pipeline()
 
 @app.get('/api/hunter/opportunities')
 def opportunities(category: str | None = Query(default=None), min_score: int = Query(default=0, ge=0, le=100), status: str | None = Query(default=None)):
     return {'items': enrich_opportunities(get_opportunities(category=category, min_score=min_score, status=status))}
+
+@app.get('/api/hunter/ledger')
+def portfolio_ledger(): return build_portfolio_ledger(get_opportunities())
+@app.get('/api/hunter/pnl')
+def portfolio_profit_and_loss(): return portfolio_pnl(get_opportunities())
 
 @app.get('/api/hunter/opportunities/{opportunity_id}')
 def opportunity(opportunity_id: str):
@@ -105,7 +104,14 @@ def opportunity(opportunity_id: str):
     item['proof_summary'] = build_proof_summary(opportunity_id)
     sync_opportunity(opportunity_id, [str(t.get('id')) for t in (item.get('tasks') or [])])
     item['state_summary'] = state_summary(opportunity_id)
+    item['ledger'] = build_reward_ledger(opportunity_id)
+    item['pnl'] = opportunity_pnl(item)
     return item
+
+@app.get('/api/hunter/opportunities/{opportunity_id}/ledger')
+def opportunity_ledger(opportunity_id: str):
+    if not get_opportunity(opportunity_id): raise HTTPException(404, 'Opportunity not found')
+    return build_reward_ledger(opportunity_id)
 
 @app.get('/api/hunter/opportunities/{opportunity_id}/research')
 def research(opportunity_id: str):
