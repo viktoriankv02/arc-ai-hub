@@ -1,13 +1,17 @@
 # ARC AI HUB — Airdrop Agent v0.9
 
-v0.9 turns the v0.8 safety shell into an interactive ARC Testnet control center. The frontend can verify the live RPC, inspect an EVM wallet balance, and create approval-only transaction proposals.
+v0.9 is the first interactive testnet/opportunity control center. It connects the frontend to the FastAPI safety layer, verifies the live ARC Testnet RPC, inspects a wallet balance, creates approval-only transaction proposals, and displays normalized opportunities with transparent scoring and task checklists.
 
 ## Added in v0.9
 - Live ARC Testnet JSON-RPC check
-- Chain ID verification against 57001
+- Chain ID verification against `57001`
 - Current block number display
 - Wallet balance inspection through `eth_getBalance`
 - Persistent transaction proposal queue
+- Normalized Opportunity model
+- Transparent Opportunity Score
+- Eligibility, source confidence, risk, cost and time fields
+- Frontend opportunity board with task checklist
 - Backend API tests with pytest
 - Responsive mobile/desktop control center
 - DEMO MODE when the backend is offline
@@ -21,7 +25,6 @@ python -m venv backend\.venv
 ```
 
 ## Run backend tests
-From the project root:
 ```powershell
 .\backend\.venv\Scripts\python.exe -m pytest backend -q
 ```
@@ -43,16 +46,18 @@ Open the Vite URL shown in the terminal. The frontend uses `http://127.0.0.1:800
 4. Enter an EVM wallet address.
 5. Press **Перевірити адресу**.
 6. Press **Баланс / RPC** and verify the returned ARC balance and block.
-7. Press **Створити TEST proposal**.
-8. Confirm the proposal appears in **Approval Queue** as `PENDING_APPROVAL`.
-9. Press **Запустити UI test** and verify `Frontend interaction OK`.
-10. Confirm that no private key, signature, or broadcast is requested.
+7. Open **Opportunity Board** and select an opportunity.
+8. Tick/un-tick tasks in the checklist.
+9. Press **Створити TEST proposal**.
+10. Confirm the proposal appears in **Approval Queue** as `PENDING_APPROVAL`.
+11. Press **Запустити UI test** and verify `Frontend interaction OK`.
+12. Confirm that no private key, signature, or broadcast is requested.
 
 ## Safety boundary
 This version does **not** store private keys or seed phrases and does not sign or broadcast transactions. A transaction is represented as a proposal and remains `PENDING_APPROVAL` until a future explicit approval/signing layer is implemented.
 
 ## Architecture
-Discovery → Risk/Score → Orchestrator → Task Queue → Wallet/Chain Adapter → Transaction Proposal → Approval → Proof → Reward
+Discovery → Normalize Opportunity → Score/Risk → Eligibility → Task Queue → Wallet/Chain Adapter → Transaction Proposal → Approval → Proof → Reward
 
 ## Next implementation target
-v0.9.1 will add the first real **Opportunity Engine** layer: normalized opportunities, scoring, task checklists, source confidence, risk score, deadline, estimated cost/time, and a frontend opportunity board. No automatic wallet signing will be added without an explicit approval boundary.
+Connect the Opportunity Engine to real sources such as CryptoRank, INCRYPTED, official project feeds and quest platforms, then add source freshness, deduplication, reward tracking and proof storage. External source ingestion will remain separated from wallet signing and will not bypass the approval boundary.
