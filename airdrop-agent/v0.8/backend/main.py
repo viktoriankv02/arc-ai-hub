@@ -13,6 +13,7 @@ from .opportunity_engine import get_opportunity, list_opportunities
 from .opportunity_sources import discover_live_opportunities
 from .wallet_adapter import CHAINS, normalize_address, wallet_status
 from .transaction_guard import make_proposal
+from .task_engine import build_task_plan, validate_proof, validate_transition, TaskStatus
 
 app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -21,6 +22,7 @@ DATA.mkdir(exist_ok=True)
 TX_FILE = DATA / "tx_proposals.json"
 OPP_FILE = DATA / "opportunities.json"
 SOURCE_FILE = DATA / "source_status.json"
+TASK_FILE = DATA / "task_state.json"
 
 
 def load_tx():
@@ -32,18 +34,22 @@ def load_tx():
 def save_tx(items): TX_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_live_opportunities():
-    if not OPP_FILE.exists(): return []
-    try:
-        value = json.loads(OPP_FILE.read_text(encoding="utf-8"))
-        return value if isinstance(value, list) else []
-    except (OSError, json.JSONDecodeError): return []
+def load_json(path: Path, default):
+    if not path.exists(): return default
+    try: return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError): return default
+
+
+def save_json(path: Path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_live_opportunities(): return load_json(OPP_FILE, [])
 
 
 def refresh_live_sources():
     items, status = discover_live_opportunities()
-    if items: OPP_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    SOURCE_FILE.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+    if items: save_json(OPP_FILE, items)
+    save_json(SOURCE_FILE, status)
     return items, status
 
 
@@ -72,6 +78,21 @@ class TxRequest(BaseModel):
     value_wei: str = "0"
     data: str = "0x"
     purpose: str = ""
+
+class TaskPlanRequest(BaseModel):
+    opportunity_id: str
+    wallet_connected: bool = False
+
+class TaskTransitionRequest(BaseModel):
+    opportunity_id: str
+    task_id: str
+    target_status: str
+
+class ProofRequest(BaseModel):
+    opportunity_id: str
+    task_id: str
+    proof_type: str
+    value: str
 
 
 @app.get("/api/health")
@@ -105,8 +126,7 @@ def testnet_status():
 @app.get("/api/opportunities")
 def opportunities(category: str | None = Query(default=None), chain: str | None = Query(default=None), max_cost: float | None = Query(default=None, ge=0)):
     live = load_live_opportunities()
-    if not live:
-        live, _ = refresh_live_sources()
+    if not live: live, _ = refresh_live_sources()
     items = live + list_opportunities(category=None, chain=None, max_cost=None)
     unique = {item.get("id"): item for item in items if item.get("id")}
     items = list(unique.values())
@@ -122,15 +142,60 @@ def refresh_opportunities():
 
 @app.get("/api/opportunities/sources")
 def opportunity_sources():
-    if not SOURCE_FILE.exists(): return {"sources": {"cryptorank": "not_run", "incrypted": "not_run", "errors": []}}
-    try: return {"sources": json.loads(SOURCE_FILE.read_text(encoding="utf-8"))}
-    except (OSError, json.JSONDecodeError): return {"sources": {"errors": ["Invalid source status cache"]}}
+    return {"sources": load_json(SOURCE_FILE, {"cryptorank": "not_run", "incrypted": "not_run", "errors": []})}
 
 @app.get("/api/opportunities/{opportunity_id}")
 def opportunity(opportunity_id: str):
     item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
     if item is None: raise HTTPException(404, "Opportunity not found")
     return {"opportunity": item}
+
+@app.post("/api/tasks/plan")
+def task_plan(req: TaskPlanRequest):
+    item = next((x for x in load_live_opportunities() if x.get("id") == req.opportunity_id), None) or get_opportunity(req.opportunity_id)
+    if item is None: raise HTTPException(404, "Opportunity not found")
+    plan = build_task_plan(item, req.wallet_connected)
+    state = load_json(TASK_FILE, {})
+    state[req.opportunity_id] = {"tasks": plan}
+    save_json(TASK_FILE, state)
+    return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
+
+@app.get("/api/tasks/{opportunity_id}")
+def get_task_plan(opportunity_id: str):
+    state = load_json(TASK_FILE, {})
+    if opportunity_id in state: return {"opportunity_id": opportunity_id, **state[opportunity_id]}
+    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
+    if item is None: raise HTTPException(404, "Opportunity not found")
+    return {"opportunity_id": opportunity_id, "tasks": build_task_plan(item)}
+
+@app.post("/api/tasks/transition")
+def transition_task(req: TaskTransitionRequest):
+    state = load_json(TASK_FILE, {})
+    record = state.get(req.opportunity_id)
+    if not record: raise HTTPException(404, "Task plan not found; call /api/tasks/plan first")
+    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
+    if task is None: raise HTTPException(404, "Task not found")
+    current = task.get("status", TaskStatus.PENDING.value); target = req.target_status.upper()
+    ok, reason = validate_transition(current, target)
+    if not ok: raise HTTPException(409, reason)
+    if target in {TaskStatus.APPROVED.value, TaskStatus.COMPLETED.value} and task.get("approval_required") and current != TaskStatus.APPROVED.value:
+        if target == TaskStatus.COMPLETED.value: raise HTTPException(403, "Explicit approval required before completion")
+    task["status"] = target
+    save_json(TASK_FILE, state)
+    return {"ok": True, "task": task}
+
+@app.post("/api/tasks/proof")
+def add_proof(req: ProofRequest):
+    ok, reason = validate_proof(req.proof_type, req.value)
+    if not ok: raise HTTPException(400, reason)
+    state = load_json(TASK_FILE, {})
+    record = state.get(req.opportunity_id)
+    if not record: raise HTTPException(404, "Task plan not found")
+    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
+    if task is None: raise HTTPException(404, "Task not found")
+    task["proof"] = {"type": req.proof_type, "value": req.value.strip(), "status": "RECORDED"}
+    save_json(TASK_FILE, state)
+    return {"ok": True, "task": task, "submission": "manual"}
 
 @app.post("/api/tx/proposal")
 def create_proposal(req: TxRequest):
