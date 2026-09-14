@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -25,6 +26,7 @@ def opportunity_pnl(opportunity: dict[str, Any]) -> dict[str, Any]:
         "net_value": str(gross - spent),
         "roi_proxy": str((gross - spent) / spent) if spent else None,
         "reward_events": ledger["event_count"],
+        "by_asset": ledger["by_asset"],
     }
 
 
@@ -33,6 +35,10 @@ def portfolio_pnl(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     gross = sum((_d(x["gross_received"]) for x in rows), Decimal("0"))
     spent = sum((_d(x["total_spent"]) for x in rows), Decimal("0"))
     net = gross - spent
+    assets: dict[str, Decimal] = defaultdict(Decimal)
+    for row in rows:
+        for asset, value in row.get("by_asset", {}).items():
+            assets[asset] += _d(value)
     return {
         "opportunities": len(rows),
         "gross_received": str(gross),
@@ -41,5 +47,6 @@ def portfolio_pnl(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         "roi_proxy": str(net / spent) if spent else None,
         "profitable": sum(1 for x in rows if _d(x["net_value"]) > 0),
         "unprofitable": sum(1 for x in rows if _d(x["net_value"]) < 0),
+        "by_asset": {asset: str(value) for asset, value in sorted(assets.items())},
         "rows": rows,
     }
