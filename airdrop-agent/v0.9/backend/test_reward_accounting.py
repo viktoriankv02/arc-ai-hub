@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pnl_engine import portfolio_pnl
+from backend.pnl_engine import portfolio_pnl
 
 
 def test_empty_portfolio_is_zero() -> None:
