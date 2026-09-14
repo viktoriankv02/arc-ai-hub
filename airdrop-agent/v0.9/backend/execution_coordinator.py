@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .proof_engine import build_proof_summary, record_proof, reward_events
+from .reward_policy import reward_transition_allowed
 from .task_state_machine import get_task_state, transition_task
 
 SENSITIVE_MODES = {"APPROVAL", "USER_ONLY", "MANUAL"}
@@ -54,6 +55,9 @@ def reconcile_reward(opportunity: dict[str, Any], task_id: str) -> dict[str, Any
     opportunity_id = str(opportunity.get("id"))
     state = get_task_state(opportunity_id, task_id)
     events = [x for x in reward_events(opportunity_id) if str(x.get("task_id")) == task_id]
-    if events and state.get("state") == "REWARD_PENDING":
-        transition_task(opportunity_id, task_id, "REWARDED", "reward event detected")
-    return {"task_id": task_id, "state": get_task_state(opportunity_id, task_id), "reward_events": events}
+    confirmed = reward_transition_allowed(events)
+    transitioned = False
+    if confirmed and state.get("state") == "REWARD_PENDING":
+        transition_task(opportunity_id, task_id, "REWARDED", "reward policy confirmed positive reward event")
+        transitioned = True
+    return {"task_id": task_id, "state": get_task_state(opportunity_id, task_id), "reward_events": events, "reward_confirmed": confirmed, "transitioned": transitioned}
