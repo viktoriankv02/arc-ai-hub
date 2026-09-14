@@ -14,6 +14,7 @@ from .opportunity_sources import discover_live_opportunities
 from .wallet_adapter import CHAINS, normalize_address, wallet_status
 from .transaction_guard import make_proposal
 from .task_engine import build_task_plan, validate_proof, validate_transition, TaskStatus
+from .reward_engine import RewardStatus, make_history_event, make_reward_record, validate_reward_transition
 
 app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -23,6 +24,8 @@ TX_FILE = DATA / "tx_proposals.json"
 OPP_FILE = DATA / "opportunities.json"
 SOURCE_FILE = DATA / "source_status.json"
 TASK_FILE = DATA / "task_state.json"
+REWARD_FILE = DATA / "reward_state.json"
+HISTORY_FILE = DATA / "history.json"
 
 
 def load_tx():
@@ -93,6 +96,19 @@ class ProofRequest(BaseModel):
     task_id: str
     proof_type: str
     value: str
+
+class RewardRequest(BaseModel):
+    opportunity_id: str
+    status: str
+    amount: str = ""
+    token: str = ""
+    claim_url: str = ""
+    tx_hash: str = ""
+    notes: str = ""
+
+class RewardTransitionRequest(BaseModel):
+    opportunity_id: str
+    target_status: str
 
 
 @app.get("/api/health")
@@ -196,6 +212,71 @@ def add_proof(req: ProofRequest):
     task["proof"] = {"type": req.proof_type, "value": req.value.strip(), "status": "RECORDED"}
     save_json(TASK_FILE, state)
     return {"ok": True, "task": task, "submission": "manual"}
+
+
+def opportunity_for(opportunity_id: str) -> dict:
+    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
+    if item is None: raise HTTPException(404, "Opportunity not found")
+    return item
+
+
+@app.post("/api/rewards")
+def create_or_update_reward(req: RewardRequest):
+    item = opportunity_for(req.opportunity_id)
+    try:
+        RewardStatus(req.status.upper())
+    except ValueError: raise HTTPException(400, "Unsupported reward status")
+    rewards = load_json(REWARD_FILE, {})
+    existing = rewards.get(req.opportunity_id)
+    if existing:
+        current = existing.get("status", RewardStatus.UNKNOWN.value)
+        ok, reason = validate_reward_transition(current, req.status.upper())
+        if not ok and current != req.status.upper(): raise HTTPException(409, reason)
+        record = existing
+        record.update({"status": req.status.upper(), "amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes})
+        record["updated_at"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    else:
+        record = make_reward_record(item, req.status.upper()).as_dict()
+        record.update({"amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes})
+    rewards[req.opportunity_id] = record
+    save_json(REWARD_FILE, rewards)
+    history = load_json(HISTORY_FILE, [])
+    history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"status": record["status"], "amount": record.get("amount", ""), "token": record.get("token", "") }))
+    save_json(HISTORY_FILE, history[:500])
+    return {"ok": True, "reward": record}
+
+@app.get("/api/rewards")
+def rewards():
+    return {"items": list(load_json(REWARD_FILE, {}).values())}
+
+@app.get("/api/rewards/{opportunity_id}")
+def reward(opportunity_id: str):
+    record = load_json(REWARD_FILE, {}).get(opportunity_id)
+    if record is None: raise HTTPException(404, "Reward record not found")
+    return {"reward": record}
+
+@app.post("/api/rewards/transition")
+def transition_reward(req: RewardTransitionRequest):
+    rewards = load_json(REWARD_FILE, {})
+    record = rewards.get(req.opportunity_id)
+    if record is None: raise HTTPException(404, "Reward record not found")
+    target = req.target_status.upper(); current = record.get("status", RewardStatus.UNKNOWN.value)
+    ok, reason = validate_reward_transition(current, target)
+    if not ok: raise HTTPException(409, reason)
+    record["status"] = target
+    from datetime import datetime, timezone
+    record["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_json(REWARD_FILE, rewards)
+    history = load_json(HISTORY_FILE, [])
+    history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"from": current, "to": target}))
+    save_json(HISTORY_FILE, history[:500])
+    return {"ok": True, "reward": record}
+
+@app.get("/api/history")
+def history(limit: int = Query(default=50, ge=1, le=500), opportunity_id: str | None = None):
+    items = load_json(HISTORY_FILE, [])
+    if opportunity_id: items = [x for x in items if x.get("opportunity_id") == opportunity_id]
+    return {"items": items[:limit]}
 
 @app.post("/api/tx/proposal")
 def create_proposal(req: TxRequest):
