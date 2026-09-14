@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -15,6 +16,7 @@ from .wallet_adapter import CHAINS, normalize_address, wallet_status
 from .transaction_guard import make_proposal
 from .task_engine import build_task_plan, validate_proof, validate_transition, TaskStatus
 from .reward_engine import RewardStatus, make_history_event, make_reward_record, validate_reward_transition
+from .analytics_engine import summarize
 
 app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -157,61 +159,10 @@ def refresh_opportunities():
     return {"ok": bool(items), "count": len(items), "sources": status, "items": items}
 
 @app.get("/api/opportunities/sources")
-def opportunity_sources():
-    return {"sources": load_json(SOURCE_FILE, {"cryptorank": "not_run", "incrypted": "not_run", "errors": []})}
+def opportunity_sources(): return {"sources": load_json(SOURCE_FILE, {"cryptorank": "not_run", "incrypted": "not_run", "errors": []})}
 
 @app.get("/api/opportunities/{opportunity_id}")
-def opportunity(opportunity_id: str):
-    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
-    if item is None: raise HTTPException(404, "Opportunity not found")
-    return {"opportunity": item}
-
-@app.post("/api/tasks/plan")
-def task_plan(req: TaskPlanRequest):
-    item = next((x for x in load_live_opportunities() if x.get("id") == req.opportunity_id), None) or get_opportunity(req.opportunity_id)
-    if item is None: raise HTTPException(404, "Opportunity not found")
-    plan = build_task_plan(item, req.wallet_connected)
-    state = load_json(TASK_FILE, {})
-    state[req.opportunity_id] = {"tasks": plan}
-    save_json(TASK_FILE, state)
-    return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
-
-@app.get("/api/tasks/{opportunity_id}")
-def get_task_plan(opportunity_id: str):
-    state = load_json(TASK_FILE, {})
-    if opportunity_id in state: return {"opportunity_id": opportunity_id, **state[opportunity_id]}
-    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
-    if item is None: raise HTTPException(404, "Opportunity not found")
-    return {"opportunity_id": opportunity_id, "tasks": build_task_plan(item)}
-
-@app.post("/api/tasks/transition")
-def transition_task(req: TaskTransitionRequest):
-    state = load_json(TASK_FILE, {})
-    record = state.get(req.opportunity_id)
-    if not record: raise HTTPException(404, "Task plan not found; call /api/tasks/plan first")
-    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
-    if task is None: raise HTTPException(404, "Task not found")
-    current = task.get("status", TaskStatus.PENDING.value); target = req.target_status.upper()
-    ok, reason = validate_transition(current, target)
-    if not ok: raise HTTPException(409, reason)
-    if target in {TaskStatus.APPROVED.value, TaskStatus.COMPLETED.value} and task.get("approval_required") and current != TaskStatus.APPROVED.value:
-        if target == TaskStatus.COMPLETED.value: raise HTTPException(403, "Explicit approval required before completion")
-    task["status"] = target
-    save_json(TASK_FILE, state)
-    return {"ok": True, "task": task}
-
-@app.post("/api/tasks/proof")
-def add_proof(req: ProofRequest):
-    ok, reason = validate_proof(req.proof_type, req.value)
-    if not ok: raise HTTPException(400, reason)
-    state = load_json(TASK_FILE, {})
-    record = state.get(req.opportunity_id)
-    if not record: raise HTTPException(404, "Task plan not found")
-    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
-    if task is None: raise HTTPException(404, "Task not found")
-    task["proof"] = {"type": req.proof_type, "value": req.value.strip(), "status": "RECORDED"}
-    save_json(TASK_FILE, state)
-    return {"ok": True, "task": task, "submission": "manual"}
+def opportunity(opportunity_id: str): return {"opportunity": opportunity_for(opportunity_id)}
 
 
 def opportunity_for(opportunity_id: str) -> dict:
@@ -219,35 +170,61 @@ def opportunity_for(opportunity_id: str) -> dict:
     if item is None: raise HTTPException(404, "Opportunity not found")
     return item
 
+@app.post("/api/tasks/plan")
+def task_plan(req: TaskPlanRequest):
+    item = opportunity_for(req.opportunity_id)
+    plan = build_task_plan(item, req.wallet_connected)
+    state = load_json(TASK_FILE, {}); state[req.opportunity_id] = {"tasks": plan}; save_json(TASK_FILE, state)
+    return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
+
+@app.get("/api/tasks/{opportunity_id}")
+def get_task_plan(opportunity_id: str):
+    state = load_json(TASK_FILE, {})
+    if opportunity_id in state: return {"opportunity_id": opportunity_id, **state[opportunity_id]}
+    return {"opportunity_id": opportunity_id, "tasks": build_task_plan(opportunity_for(opportunity_id))}
+
+@app.post("/api/tasks/transition")
+def transition_task(req: TaskTransitionRequest):
+    state = load_json(TASK_FILE, {}); record = state.get(req.opportunity_id)
+    if not record: raise HTTPException(404, "Task plan not found; call /api/tasks/plan first")
+    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
+    if task is None: raise HTTPException(404, "Task not found")
+    current = task.get("status", TaskStatus.PENDING.value); target = req.target_status.upper(); ok, reason = validate_transition(current, target)
+    if not ok: raise HTTPException(409, reason)
+    if target == TaskStatus.COMPLETED.value and task.get("approval_required") and current != TaskStatus.APPROVED.value: raise HTTPException(403, "Explicit approval required before completion")
+    task["status"] = target; save_json(TASK_FILE, state)
+    return {"ok": True, "task": task}
+
+@app.post("/api/tasks/proof")
+def add_proof(req: ProofRequest):
+    ok, reason = validate_proof(req.proof_type, req.value)
+    if not ok: raise HTTPException(400, reason)
+    state = load_json(TASK_FILE, {}); record = state.get(req.opportunity_id)
+    if not record: raise HTTPException(404, "Task plan not found")
+    task = next((t for t in record["tasks"] if t["id"] == req.task_id), None)
+    if task is None: raise HTTPException(404, "Task not found")
+    task["proof"] = {"type": req.proof_type, "value": req.value.strip(), "status": "RECORDED"}; save_json(TASK_FILE, state)
+    history = load_json(HISTORY_FILE, []); history.insert(0, make_history_event("PROOF_RECORDED", req.opportunity_id, {"task_id": req.task_id, "proof_type": req.proof_type})); save_json(HISTORY_FILE, history[:500])
+    return {"ok": True, "task": task, "submission": "manual"}
 
 @app.post("/api/rewards")
 def create_or_update_reward(req: RewardRequest):
     item = opportunity_for(req.opportunity_id)
-    try:
-        RewardStatus(req.status.upper())
+    try: RewardStatus(req.status.upper())
     except ValueError: raise HTTPException(400, "Unsupported reward status")
-    rewards = load_json(REWARD_FILE, {})
-    existing = rewards.get(req.opportunity_id)
+    rewards = load_json(REWARD_FILE, {}); existing = rewards.get(req.opportunity_id)
     if existing:
-        current = existing.get("status", RewardStatus.UNKNOWN.value)
-        ok, reason = validate_reward_transition(current, req.status.upper())
+        current = existing.get("status", RewardStatus.UNKNOWN.value); ok, reason = validate_reward_transition(current, req.status.upper())
         if not ok and current != req.status.upper(): raise HTTPException(409, reason)
-        record = existing
-        record.update({"status": req.status.upper(), "amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes})
-        record["updated_at"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        record = existing; record.update({"status": req.status.upper(), "amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes, "updated_at": datetime.now(timezone.utc).isoformat()})
     else:
-        record = make_reward_record(item, req.status.upper()).as_dict()
-        record.update({"amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes})
-    rewards[req.opportunity_id] = record
-    save_json(REWARD_FILE, rewards)
-    history = load_json(HISTORY_FILE, [])
-    history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"status": record["status"], "amount": record.get("amount", ""), "token": record.get("token", "") }))
-    save_json(HISTORY_FILE, history[:500])
+        record = make_reward_record(item, req.status.upper()).as_dict(); record.update({"amount": req.amount, "token": req.token, "claim_url": req.claim_url, "tx_hash": req.tx_hash, "notes": req.notes})
+    rewards[req.opportunity_id] = record; save_json(REWARD_FILE, rewards)
+    history = load_json(HISTORY_FILE, []); history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"status": record["status"], "amount": record.get("amount", ""), "token": record.get("token", "")})); save_json(HISTORY_FILE, history[:500])
     return {"ok": True, "reward": record}
 
 @app.get("/api/rewards")
-def rewards():
-    return {"items": list(load_json(REWARD_FILE, {}).values())}
+def rewards(): return {"items": list(load_json(REWARD_FILE, {}).values())}
 
 @app.get("/api/rewards/{opportunity_id}")
 def reward(opportunity_id: str):
@@ -257,19 +234,12 @@ def reward(opportunity_id: str):
 
 @app.post("/api/rewards/transition")
 def transition_reward(req: RewardTransitionRequest):
-    rewards = load_json(REWARD_FILE, {})
-    record = rewards.get(req.opportunity_id)
+    rewards = load_json(REWARD_FILE, {}); record = rewards.get(req.opportunity_id)
     if record is None: raise HTTPException(404, "Reward record not found")
-    target = req.target_status.upper(); current = record.get("status", RewardStatus.UNKNOWN.value)
-    ok, reason = validate_reward_transition(current, target)
+    target = req.target_status.upper(); current = record.get("status", RewardStatus.UNKNOWN.value); ok, reason = validate_reward_transition(current, target)
     if not ok: raise HTTPException(409, reason)
-    record["status"] = target
-    from datetime import datetime, timezone
-    record["updated_at"] = datetime.now(timezone.utc).isoformat()
-    save_json(REWARD_FILE, rewards)
-    history = load_json(HISTORY_FILE, [])
-    history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"from": current, "to": target}))
-    save_json(HISTORY_FILE, history[:500])
+    record["status"] = target; record["updated_at"] = datetime.now(timezone.utc).isoformat(); save_json(REWARD_FILE, rewards)
+    history = load_json(HISTORY_FILE, []); history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"from": current, "to": target})); save_json(HISTORY_FILE, history[:500])
     return {"ok": True, "reward": record}
 
 @app.get("/api/history")
@@ -277,6 +247,10 @@ def history(limit: int = Query(default=50, ge=1, le=500), opportunity_id: str | 
     items = load_json(HISTORY_FILE, [])
     if opportunity_id: items = [x for x in items if x.get("opportunity_id") == opportunity_id]
     return {"items": items[:limit]}
+
+@app.get("/api/analytics")
+def analytics():
+    return {"ok": True, "summary": summarize(load_live_opportunities(), load_json(TASK_FILE, {}), load_json(REWARD_FILE, {}))}
 
 @app.post("/api/tx/proposal")
 def create_proposal(req: TxRequest):
