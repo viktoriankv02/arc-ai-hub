@@ -16,7 +16,6 @@ from .transaction_guard import make_proposal
 
 app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
 DATA = Path(__file__).resolve().parent / "data"
 DATA.mkdir(exist_ok=True)
 TX_FILE = DATA / "tx_proposals.json"
@@ -30,8 +29,7 @@ def load_tx():
     except Exception: return []
 
 
-def save_tx(items):
-    TX_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_tx(items): TX_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_live_opportunities():
@@ -42,8 +40,11 @@ def load_live_opportunities():
     except (OSError, json.JSONDecodeError): return []
 
 
-def save_source_status(value):
-    SOURCE_FILE.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+def refresh_live_sources():
+    items, status = discover_live_opportunities()
+    if items: OPP_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    SOURCE_FILE.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+    return items, status
 
 
 def rpc_call(chain: str, method: str, params: list):
@@ -51,8 +52,7 @@ def rpc_call(chain: str, method: str, params: list):
     if config is None: raise KeyError(f"Unsupported chain: {chain}")
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     request = urllib.request.Request(config.rpc_url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ARC-AI-HUB/0.9"}, method="POST")
-    with urllib.request.urlopen(request, timeout=8) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    with urllib.request.urlopen(request, timeout=8) as response: body = json.loads(response.read().decode("utf-8"))
     if "error" in body: raise RuntimeError(body["error"].get("message", "RPC error"))
     return body.get("result")
 
@@ -75,12 +75,10 @@ class TxRequest(BaseModel):
 
 
 @app.get("/api/health")
-def health():
-    return {"ok": True, "version": "0.9.0", "mode": "approval-only"}
+def health(): return {"ok": True, "version": "0.9.0", "mode": "approval-only"}
 
 @app.get("/api/wallet/chains")
-def chains():
-    return {"chains": [c.__dict__ for c in CHAINS.values()]}
+def chains(): return {"chains": [c.__dict__ for c in CHAINS.values()]}
 
 @app.post("/api/wallet/validate")
 def validate_wallet(req: WalletRequest):
@@ -90,11 +88,8 @@ def validate_wallet(req: WalletRequest):
 @app.post("/api/wallet/inspect")
 def inspect_wallet(req: WalletInspectRequest):
     try:
-        address = normalize_address(req.address)
-        chain = req.chain.strip().lower()
-        block_hex = rpc_call(chain, "eth_blockNumber", [])
-        balance_hex = rpc_call(chain, "eth_getBalance", [address, "latest"])
-        chain_id_hex = rpc_call(chain, "eth_chainId", [])
+        address = normalize_address(req.address); chain = req.chain.strip().lower()
+        block_hex = rpc_call(chain, "eth_blockNumber", []); balance_hex = rpc_call(chain, "eth_getBalance", [address, "latest"]); chain_id_hex = rpc_call(chain, "eth_chainId", [])
         balance_wei = int(balance_hex, 16)
         return {"ok": True, "address": address, "chain": chain, "chain_id": int(chain_id_hex, 16), "block_number": int(block_hex, 16), "balance_wei": str(balance_wei), "balance_native": balance_wei / 10**18}
     except (ValueError, KeyError) as e: raise HTTPException(400, str(e))
@@ -103,17 +98,16 @@ def inspect_wallet(req: WalletInspectRequest):
 @app.get("/api/testnet/status")
 def testnet_status():
     try:
-        chain_id_hex = rpc_call("arc-testnet", "eth_chainId", [])
-        block_hex = rpc_call("arc-testnet", "eth_blockNumber", [])
-        actual = int(chain_id_hex, 16)
-        expected = CHAINS["arc-testnet"].chain_id
+        chain_id_hex = rpc_call("arc-testnet", "eth_chainId", []); block_hex = rpc_call("arc-testnet", "eth_blockNumber", []); actual = int(chain_id_hex, 16); expected = CHAINS["arc-testnet"].chain_id
         return {"ok": actual == expected, "network": CHAINS["arc-testnet"].name, "chain_id": actual, "expected_chain_id": expected, "block_number": int(block_hex, 16), "rpc": CHAINS["arc-testnet"].rpc_url}
-    except (KeyError, urllib.error.URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as e:
-        raise HTTPException(502, f"Testnet RPC unavailable: {e}")
+    except (KeyError, urllib.error.URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as e: raise HTTPException(502, f"Testnet RPC unavailable: {e}")
 
 @app.get("/api/opportunities")
 def opportunities(category: str | None = Query(default=None), chain: str | None = Query(default=None), max_cost: float | None = Query(default=None, ge=0)):
-    items = load_live_opportunities() + list_opportunities(category=None, chain=None, max_cost=None)
+    live = load_live_opportunities()
+    if not live:
+        live, _ = refresh_live_sources()
+    items = live + list_opportunities(category=None, chain=None, max_cost=None)
     unique = {item.get("id"): item for item in items if item.get("id")}
     items = list(unique.values())
     if category: items = [x for x in items if x.get("category") == category]
@@ -123,10 +117,7 @@ def opportunities(category: str | None = Query(default=None), chain: str | None 
 
 @app.post("/api/opportunities/refresh")
 def refresh_opportunities():
-    items, status = discover_live_opportunities()
-    if items:
-        OPP_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    save_source_status(status)
+    items, status = refresh_live_sources()
     return {"ok": bool(items), "count": len(items), "sources": status, "items": items}
 
 @app.get("/api/opportunities/sources")
@@ -145,9 +136,7 @@ def opportunity(opportunity_id: str):
 def create_proposal(req: TxRequest):
     try: proposal = make_proposal(req.proposal_id, req.chain, req.to, req.value_wei, req.data, req.purpose)
     except (ValueError, KeyError) as e: raise HTTPException(400, str(e))
-    items = [x for x in load_tx() if x.get("proposal_id") != proposal.proposal_id]
-    items.insert(0, proposal.as_dict())
-    save_tx(items)
+    items = [x for x in load_tx() if x.get("proposal_id") != proposal.proposal_id]; items.insert(0, proposal.as_dict()); save_tx(items)
     return {"ok": True, "proposal": proposal.as_dict()}
 
 @app.get("/api/tx/proposals")
@@ -160,5 +149,4 @@ def proposal(proposal_id: str):
     raise HTTPException(404, "Proposal not found")
 
 @app.get("/api/demo/testnet")
-def demo_testnet():
-    return {"network": "ARC Testnet", "chain_id": 57001, "rpc": "https://rpc.testnet.arc.network", "explorer": "https://testnet.arcscan.app", "status": "ready"}
+def demo_testnet(): return {"network": "ARC Testnet", "chain_id": 57001, "rpc": "https://rpc.testnet.arc.network", "explorer": "https://testnet.arcscan.app", "status": "ready"}
