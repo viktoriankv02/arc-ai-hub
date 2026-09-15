@@ -19,8 +19,9 @@ from .reward_engine import RewardStatus, make_history_event, make_reward_record,
 from .task_engine import TaskStatus, build_task_plan, validate_proof, validate_transition
 from .transaction_guard import make_proposal
 from .wallet_adapter import CHAINS, normalize_address, wallet_status
+from .workflow_engine import build_task_plan_document
 
-app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.2")
+app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.3")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 DATA = Path(__file__).resolve().parent / "data"
 DATA.mkdir(exist_ok=True)
@@ -40,7 +41,6 @@ def load_json(path: Path, default):
 
 
 def save_json(path: Path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-
 def load_tx(): return load_json(TX_FILE, [])
 def save_tx(items): save_json(TX_FILE, items)
 def load_live_opportunities(): return load_json(OPP_FILE, [])
@@ -125,7 +125,7 @@ def _build_scheduler():
 
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.2", "mode": "approval-only"}
+def health(): return {"ok": True, "version": "0.9.3", "mode": "approval-only"}
 @app.get("/api/wallet/chains")
 def chains(): return {"chains": [c.__dict__ for c in CHAINS.values()]}
 
@@ -169,13 +169,32 @@ def refresh_opportunities():
     return {"ok": bool(items), "count": len(items), "sources": status, "items": items}
 @app.get("/api/opportunities/sources")
 def opportunity_sources(): return {"sources": load_json(SOURCE_FILE, {"cryptorank": "not_run", "incrypted": "not_run", "errors": []})}
-@app.get("/api/opportunities/{opportunity_id}")
-def opportunity(opportunity_id: str): return {"opportunity": opportunity_for(opportunity_id)}
 
+# Static sub-routes must be registered before the generic /{opportunity_id} route.
 @app.get("/api/opportunities/{opportunity_id}/evaluation")
 def opportunity_evaluation(opportunity_id: str):
     item = opportunity_for(opportunity_id)
     return {"ok": True, "evaluation": evaluate_opportunity(item)}
+
+@app.get("/api/opportunities/{opportunity_id}/workspace")
+def opportunity_workspace(opportunity_id: str, wallet_connected: bool = False):
+    item = opportunity_for(opportunity_id)
+    plan = build_task_plan_document(item, wallet_connected)
+    tasks_state = load_json(TASK_FILE, {})
+    if opportunity_id in tasks_state:
+        stored = tasks_state[opportunity_id]
+        plan["tasks"] = stored.get("tasks", plan["tasks"])
+        plan["plan_id"] = stored.get("plan_id", plan["plan_id"])
+        plan["created_at"] = stored.get("created_at", plan["created_at"])
+    proofs = []
+    for task in plan["tasks"]:
+        if task.get("proof"): proofs.append({"task_id": task["id"], **task["proof"]})
+    reward_record = load_json(REWARD_FILE, {}).get(opportunity_id)
+    history_items = [x for x in load_json(HISTORY_FILE, []) if x.get("opportunity_id") == opportunity_id][:50]
+    return {"ok": True, "opportunity": item, "evaluation": plan["evaluation"], "task_plan": plan, "proof": proofs, "reward": reward_record, "history": history_items, "safety": "approval-only"}
+
+@app.get("/api/opportunities/{opportunity_id}")
+def opportunity(opportunity_id: str): return {"opportunity": opportunity_for(opportunity_id)}
 
 @app.get("/api/evaluations")
 def evaluations(limit: int = Query(default=50, ge=1, le=500)):
@@ -210,14 +229,22 @@ def scheduler_run():
 
 @app.post("/api/tasks/plan")
 def task_plan(req: TaskPlanRequest):
-    item = opportunity_for(req.opportunity_id); plan = build_task_plan(item, req.wallet_connected)
-    state = load_json(TASK_FILE, {}); state[req.opportunity_id] = {"tasks": plan}; save_json(TASK_FILE, state)
-    return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
+    item = opportunity_for(req.opportunity_id)
+    document = build_task_plan_document(item, req.wallet_connected)
+    state = load_json(TASK_FILE, {})
+    state[req.opportunity_id] = {"plan_id": document["plan_id"], "created_at": document["created_at"], "tasks": document["tasks"], "evaluation": document["evaluation"]}
+    save_json(TASK_FILE, state)
+    history = load_json(HISTORY_FILE, [])
+    history.insert(0, make_history_event("TASK_PLAN_CREATED", req.opportunity_id, {"plan_id": document["plan_id"], "task_count": len(document["tasks"]), "evaluation_score": document["evaluation"]["score"]}))
+    save_json(HISTORY_FILE, history[:500])
+    return {"ok": True, "opportunity_id": req.opportunity_id, "task_plan": document, "tasks": document["tasks"], "safety": "approval-only"}
+
 @app.get("/api/tasks/{opportunity_id}")
 def get_task_plan(opportunity_id: str):
     state = load_json(TASK_FILE, {})
     if opportunity_id in state: return {"opportunity_id": opportunity_id, **state[opportunity_id]}
-    return {"opportunity_id": opportunity_id, "tasks": build_task_plan(opportunity_for(opportunity_id))}
+    document = build_task_plan_document(opportunity_for(opportunity_id))
+    return {"opportunity_id": opportunity_id, "task_plan": document, "tasks": document["tasks"], "evaluation": document["evaluation"]}
 @app.post("/api/tasks/transition")
 def transition_task(req: TaskTransitionRequest):
     state = load_json(TASK_FILE, {}); record = state.get(req.opportunity_id)
