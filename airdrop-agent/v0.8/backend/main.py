@@ -10,15 +10,16 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .analytics_engine import summarize
+from .monitoring_scheduler_service import MonitoringSchedulerService
 from .opportunity_engine import get_opportunity, list_opportunities
 from .opportunity_sources import discover_live_opportunities
-from .wallet_adapter import CHAINS, normalize_address, wallet_status
-from .transaction_guard import make_proposal
-from .task_engine import build_task_plan, validate_proof, validate_transition, TaskStatus
 from .reward_engine import RewardStatus, make_history_event, make_reward_record, validate_reward_transition
-from .analytics_engine import summarize
+from .task_engine import TaskStatus, build_task_plan, validate_proof, validate_transition
+from .transaction_guard import make_proposal
+from .wallet_adapter import CHAINS, normalize_address, wallet_status
 
-app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.0")
+app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 DATA = Path(__file__).resolve().parent / "data"
 DATA.mkdir(exist_ok=True)
@@ -28,15 +29,7 @@ SOURCE_FILE = DATA / "source_status.json"
 TASK_FILE = DATA / "task_state.json"
 REWARD_FILE = DATA / "reward_state.json"
 HISTORY_FILE = DATA / "history.json"
-
-
-def load_tx():
-    if not TX_FILE.exists(): return []
-    try: return json.loads(TX_FILE.read_text(encoding="utf-8"))
-    except Exception: return []
-
-
-def save_tx(items): TX_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+SCHEDULER_FILE = DATA / "scheduler_state.json"
 
 
 def load_json(path: Path, default):
@@ -48,6 +41,8 @@ def load_json(path: Path, default):
 def save_json(path: Path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_tx(): return load_json(TX_FILE, [])
+def save_tx(items): save_json(TX_FILE, items)
 def load_live_opportunities(): return load_json(OPP_FILE, [])
 
 
@@ -71,11 +66,9 @@ def rpc_call(chain: str, method: str, params: list):
 class WalletRequest(BaseModel):
     address: str
     chains: list[str] = Field(default_factory=lambda: ["arc-testnet"])
-
 class WalletInspectRequest(BaseModel):
     address: str
     chain: str = "arc-testnet"
-
 class TxRequest(BaseModel):
     proposal_id: str
     chain: str
@@ -83,22 +76,18 @@ class TxRequest(BaseModel):
     value_wei: str = "0"
     data: str = "0x"
     purpose: str = ""
-
 class TaskPlanRequest(BaseModel):
     opportunity_id: str
     wallet_connected: bool = False
-
 class TaskTransitionRequest(BaseModel):
     opportunity_id: str
     task_id: str
     target_status: str
-
 class ProofRequest(BaseModel):
     opportunity_id: str
     task_id: str
     proof_type: str
     value: str
-
 class RewardRequest(BaseModel):
     opportunity_id: str
     status: str
@@ -107,14 +96,38 @@ class RewardRequest(BaseModel):
     claim_url: str = ""
     tx_hash: str = ""
     notes: str = ""
-
 class RewardTransitionRequest(BaseModel):
     opportunity_id: str
     target_status: str
+class SchedulerConfigRequest(BaseModel):
+    interval_minutes: int | None = Field(default=None, ge=5)
+    enabled: bool | None = None
+
+
+def opportunity_for(opportunity_id: str) -> dict:
+    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
+    if item is None: raise HTTPException(404, "Opportunity not found")
+    return item
+
+
+def _scheduler_state():
+    return load_json(SCHEDULER_FILE, {"interval_minutes": 60, "enabled": True, "last_run": None, "last_result": None})
+
+
+def _persist_scheduler(service: MonitoringSchedulerService):
+    save_json(SCHEDULER_FILE, {"interval_minutes": service.config.interval_minutes, "enabled": service.config.enabled, "last_run": service.last_run, "last_result": service.last_result})
+
+
+def _build_scheduler():
+    state = _scheduler_state()
+    service = MonitoringSchedulerService(refresh=refresh_live_sources, interval_minutes=state.get("interval_minutes", 60), enabled=state.get("enabled", True))
+    service.last_run = state.get("last_run")
+    service.last_result = state.get("last_result")
+    return service
 
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.0", "mode": "approval-only"}
+def health(): return {"ok": True, "version": "0.9.1", "mode": "approval-only"}
 
 @app.get("/api/wallet/chains")
 def chains(): return {"chains": [c.__dict__ for c in CHAINS.values()]}
@@ -164,16 +177,39 @@ def opportunity_sources(): return {"sources": load_json(SOURCE_FILE, {"cryptoran
 @app.get("/api/opportunities/{opportunity_id}")
 def opportunity(opportunity_id: str): return {"opportunity": opportunity_for(opportunity_id)}
 
+@app.get("/api/monitoring")
+def monitoring():
+    service = _build_scheduler()
+    return {"ok": True, "monitoring": service.monitor(load_live_opportunities()), "scheduler": service.status()}
 
-def opportunity_for(opportunity_id: str) -> dict:
-    item = next((x for x in load_live_opportunities() if x.get("id") == opportunity_id), None) or get_opportunity(opportunity_id)
-    if item is None: raise HTTPException(404, "Opportunity not found")
-    return item
+@app.post("/api/monitoring/run")
+def monitoring_run():
+    service = _build_scheduler()
+    items = load_live_opportunities()
+    result = service.monitor(items)
+    return {"ok": True, "monitoring": result}
+
+@app.get("/api/scheduler/status")
+def scheduler_status(): return {"ok": True, "scheduler": _build_scheduler().status()}
+
+@app.post("/api/scheduler/configure")
+def scheduler_configure(req: SchedulerConfigRequest):
+    service = _build_scheduler()
+    try: status = service.configure(req.interval_minutes, req.enabled)
+    except ValueError as e: raise HTTPException(400, str(e))
+    _persist_scheduler(service)
+    return {"ok": True, "scheduler": status}
+
+@app.post("/api/scheduler/run")
+def scheduler_run():
+    service = _build_scheduler()
+    result = service.run_if_due()
+    _persist_scheduler(service)
+    return {"ok": True, **result}
 
 @app.post("/api/tasks/plan")
 def task_plan(req: TaskPlanRequest):
-    item = opportunity_for(req.opportunity_id)
-    plan = build_task_plan(item, req.wallet_connected)
+    item = opportunity_for(req.opportunity_id); plan = build_task_plan(item, req.wallet_connected)
     state = load_json(TASK_FILE, {}); state[req.opportunity_id] = {"tasks": plan}; save_json(TASK_FILE, state)
     return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
 
@@ -225,13 +261,11 @@ def create_or_update_reward(req: RewardRequest):
 
 @app.get("/api/rewards")
 def rewards(): return {"items": list(load_json(REWARD_FILE, {}).values())}
-
 @app.get("/api/rewards/{opportunity_id}")
 def reward(opportunity_id: str):
     record = load_json(REWARD_FILE, {}).get(opportunity_id)
     if record is None: raise HTTPException(404, "Reward record not found")
     return {"reward": record}
-
 @app.post("/api/rewards/transition")
 def transition_reward(req: RewardTransitionRequest):
     rewards = load_json(REWARD_FILE, {}); record = rewards.get(req.opportunity_id)
@@ -249,8 +283,7 @@ def history(limit: int = Query(default=50, ge=1, le=500), opportunity_id: str | 
     return {"items": items[:limit]}
 
 @app.get("/api/analytics")
-def analytics():
-    return {"ok": True, "summary": summarize(load_live_opportunities(), load_json(TASK_FILE, {}), load_json(REWARD_FILE, {}))}
+def analytics(): return {"ok": True, "summary": summarize(load_live_opportunities(), load_json(TASK_FILE, {}), load_json(REWARD_FILE, {}))}
 
 @app.post("/api/tx/proposal")
 def create_proposal(req: TxRequest):
@@ -258,15 +291,12 @@ def create_proposal(req: TxRequest):
     except (ValueError, KeyError) as e: raise HTTPException(400, str(e))
     items = [x for x in load_tx() if x.get("proposal_id") != proposal.proposal_id]; items.insert(0, proposal.as_dict()); save_tx(items)
     return {"ok": True, "proposal": proposal.as_dict()}
-
 @app.get("/api/tx/proposals")
 def proposals(): return {"items": load_tx()}
-
 @app.get("/api/tx/proposal/{proposal_id}")
 def proposal(proposal_id: str):
     for item in load_tx():
         if item.get("proposal_id") == proposal_id: return {"proposal": item}
     raise HTTPException(404, "Proposal not found")
-
 @app.get("/api/demo/testnet")
 def demo_testnet(): return {"network": "ARC Testnet", "chain_id": 57001, "rpc": "https://rpc.testnet.arc.network", "explorer": "https://testnet.arcscan.app", "status": "ready"}
