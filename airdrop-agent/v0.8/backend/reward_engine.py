@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 
 class RewardStatus(str, Enum):
@@ -81,7 +82,7 @@ def make_history_event(event_type: str, opportunity_id: str, details: dict[str, 
     except ValueError as exc:
         raise ValueError(f"Unsupported history event: {event_type}") from exc
     return {
-        "event_id": f"evt-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "event_id": f"evt-{uuid4().hex}",
         "event_type": event,
         "opportunity_id": opportunity_id,
         "timestamp": now_iso(),
