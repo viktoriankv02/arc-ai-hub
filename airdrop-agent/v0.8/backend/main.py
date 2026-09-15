@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .analytics_engine import summarize
+from .evaluator_engine import evaluate_opportunity
 from .monitoring_scheduler_service import MonitoringSchedulerService
 from .opportunity_engine import get_opportunity, list_opportunities
 from .opportunity_sources import discover_live_opportunities
@@ -19,7 +20,7 @@ from .task_engine import TaskStatus, build_task_plan, validate_proof, validate_t
 from .transaction_guard import make_proposal
 from .wallet_adapter import CHAINS, normalize_address, wallet_status
 
-app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.1")
+app = FastAPI(title="ARC AI HUB Airdrop Agent v0.9", version="0.9.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 DATA = Path(__file__).resolve().parent / "data"
 DATA.mkdir(exist_ok=True)
@@ -39,7 +40,6 @@ def load_json(path: Path, default):
 
 
 def save_json(path: Path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 def load_tx(): return load_json(TX_FILE, [])
 def save_tx(items): save_json(TX_FILE, items)
@@ -113,10 +113,8 @@ def opportunity_for(opportunity_id: str) -> dict:
 def _scheduler_state():
     return load_json(SCHEDULER_FILE, {"interval_minutes": 60, "enabled": True, "last_run": None, "last_result": None})
 
-
 def _persist_scheduler(service: MonitoringSchedulerService):
     save_json(SCHEDULER_FILE, {"interval_minutes": service.config.interval_minutes, "enabled": service.config.enabled, "last_run": service.last_run, "last_result": service.last_result})
-
 
 def _build_scheduler():
     state = _scheduler_state()
@@ -127,8 +125,7 @@ def _build_scheduler():
 
 
 @app.get("/api/health")
-def health(): return {"ok": True, "version": "0.9.1", "mode": "approval-only"}
-
+def health(): return {"ok": True, "version": "0.9.2", "mode": "approval-only"}
 @app.get("/api/wallet/chains")
 def chains(): return {"chains": [c.__dict__ for c in CHAINS.values()]}
 
@@ -170,28 +167,35 @@ def opportunities(category: str | None = Query(default=None), chain: str | None 
 def refresh_opportunities():
     items, status = refresh_live_sources()
     return {"ok": bool(items), "count": len(items), "sources": status, "items": items}
-
 @app.get("/api/opportunities/sources")
 def opportunity_sources(): return {"sources": load_json(SOURCE_FILE, {"cryptorank": "not_run", "incrypted": "not_run", "errors": []})}
-
 @app.get("/api/opportunities/{opportunity_id}")
 def opportunity(opportunity_id: str): return {"opportunity": opportunity_for(opportunity_id)}
+
+@app.get("/api/opportunities/{opportunity_id}/evaluation")
+def opportunity_evaluation(opportunity_id: str):
+    item = opportunity_for(opportunity_id)
+    return {"ok": True, "evaluation": evaluate_opportunity(item)}
+
+@app.get("/api/evaluations")
+def evaluations(limit: int = Query(default=50, ge=1, le=500)):
+    live = load_live_opportunities()
+    if not live: live, _ = refresh_live_sources()
+    items = live + list_opportunities()
+    unique = {x.get("id"): x for x in items if x.get("id")}
+    result = [evaluate_opportunity(x) for x in unique.values()]
+    return {"items": sorted(result, key=lambda x: x["score"], reverse=True)[:limit]}
 
 @app.get("/api/monitoring")
 def monitoring():
     service = _build_scheduler()
     return {"ok": True, "monitoring": service.monitor(load_live_opportunities()), "scheduler": service.status()}
-
 @app.post("/api/monitoring/run")
 def monitoring_run():
-    service = _build_scheduler()
-    items = load_live_opportunities()
-    result = service.monitor(items)
+    service = _build_scheduler(); result = service.monitor(load_live_opportunities())
     return {"ok": True, "monitoring": result}
-
 @app.get("/api/scheduler/status")
 def scheduler_status(): return {"ok": True, "scheduler": _build_scheduler().status()}
-
 @app.post("/api/scheduler/configure")
 def scheduler_configure(req: SchedulerConfigRequest):
     service = _build_scheduler()
@@ -199,12 +203,9 @@ def scheduler_configure(req: SchedulerConfigRequest):
     except ValueError as e: raise HTTPException(400, str(e))
     _persist_scheduler(service)
     return {"ok": True, "scheduler": status}
-
 @app.post("/api/scheduler/run")
 def scheduler_run():
-    service = _build_scheduler()
-    result = service.run_if_due()
-    _persist_scheduler(service)
+    service = _build_scheduler(); result = service.run_if_due(); _persist_scheduler(service)
     return {"ok": True, **result}
 
 @app.post("/api/tasks/plan")
@@ -212,13 +213,11 @@ def task_plan(req: TaskPlanRequest):
     item = opportunity_for(req.opportunity_id); plan = build_task_plan(item, req.wallet_connected)
     state = load_json(TASK_FILE, {}); state[req.opportunity_id] = {"tasks": plan}; save_json(TASK_FILE, state)
     return {"ok": True, "opportunity_id": req.opportunity_id, "tasks": plan, "safety": "approval-only"}
-
 @app.get("/api/tasks/{opportunity_id}")
 def get_task_plan(opportunity_id: str):
     state = load_json(TASK_FILE, {})
     if opportunity_id in state: return {"opportunity_id": opportunity_id, **state[opportunity_id]}
     return {"opportunity_id": opportunity_id, "tasks": build_task_plan(opportunity_for(opportunity_id))}
-
 @app.post("/api/tasks/transition")
 def transition_task(req: TaskTransitionRequest):
     state = load_json(TASK_FILE, {}); record = state.get(req.opportunity_id)
@@ -230,7 +229,6 @@ def transition_task(req: TaskTransitionRequest):
     if target == TaskStatus.COMPLETED.value and task.get("approval_required") and current != TaskStatus.APPROVED.value: raise HTTPException(403, "Explicit approval required before completion")
     task["status"] = target; save_json(TASK_FILE, state)
     return {"ok": True, "task": task}
-
 @app.post("/api/tasks/proof")
 def add_proof(req: ProofRequest):
     ok, reason = validate_proof(req.proof_type, req.value)
@@ -258,7 +256,6 @@ def create_or_update_reward(req: RewardRequest):
     rewards[req.opportunity_id] = record; save_json(REWARD_FILE, rewards)
     history = load_json(HISTORY_FILE, []); history.insert(0, make_history_event("REWARD_STATUS_CHANGED", req.opportunity_id, {"status": record["status"], "amount": record.get("amount", ""), "token": record.get("token", "")})); save_json(HISTORY_FILE, history[:500])
     return {"ok": True, "reward": record}
-
 @app.get("/api/rewards")
 def rewards(): return {"items": list(load_json(REWARD_FILE, {}).values())}
 @app.get("/api/rewards/{opportunity_id}")
@@ -281,7 +278,6 @@ def history(limit: int = Query(default=50, ge=1, le=500), opportunity_id: str | 
     items = load_json(HISTORY_FILE, [])
     if opportunity_id: items = [x for x in items if x.get("opportunity_id") == opportunity_id]
     return {"items": items[:limit]}
-
 @app.get("/api/analytics")
 def analytics(): return {"ok": True, "summary": summarize(load_live_opportunities(), load_json(TASK_FILE, {}), load_json(REWARD_FILE, {}))}
 
