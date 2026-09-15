@@ -30,6 +30,17 @@ def _tier(score: int) -> str:
     return "AVOID"
 
 
+def _time_minutes(item: dict[str, Any]) -> int:
+    """Read both legacy estimated_time_minutes and normalized estimated_time."""
+    value = item.get("estimated_time_minutes", item.get("estimated_time", 0))
+    if isinstance(value, dict):
+        value = value.get("minutes", value.get("value", 0))
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def evaluate_opportunity(item: dict[str, Any]) -> dict[str, Any]:
     """Score an opportunity using deterministic, explainable safety heuristics.
 
@@ -39,7 +50,7 @@ def evaluate_opportunity(item: dict[str, Any]) -> dict[str, Any]:
     confidence = max(0, min(100, int(float(item.get("source_confidence", 0)))))
     risk = max(0, min(100, int(float(item.get("risk_score", 0)))))
     cost = max(0.0, float(item.get("estimated_cost", 0) or 0))
-    time = max(0, int(float(item.get("estimated_time_minutes", 0) or 0)))
+    time = _time_minutes(item)
     reward = str(item.get("reward", "Unknown")).strip()
     source = str(item.get("source", "")).strip().lower()
     url = str(item.get("official_url", "")).strip().lower()
